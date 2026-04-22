@@ -138,11 +138,25 @@ async function main(): Promise<void> {
     );
   });
 
+  // Prom-style metrics dump every 30s — covers the case where someone
+  // is tailing the keeper logs but doesn't have curl access to /status.
+  // Format mirrors what /status returns so the two sources stay aligned.
+  const metricsTick = setInterval(() => {
+    console.log(
+      `[keeper:metrics] ticks=${metrics.ticks} ` +
+        `attempted=${metrics.attempted} settled=${metrics.settled} ` +
+        `failed=${metrics.failed} ` +
+        `lastError=${metrics.lastError ?? 'none'}`,
+    );
+  }, 30_000);
+  metricsTick.unref();
+
   let stopping = false;
   const shutdown = (): void => {
     if (stopping) return;
     stopping = true;
     console.log('[keeper] shutdown signal received');
+    clearInterval(metricsTick);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5_000).unref();
   };

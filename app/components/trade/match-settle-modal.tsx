@@ -33,30 +33,47 @@ type Stage = 'beacon' | 'reveal' | 'settle' | 'sealed' | 'done';
 const SETTLE_STEPS_SOL = ['initiated', '33%', '66%', 'confirmed'];
 const SETTLE_STEPS_BTC = ['signing', 'signed (1/T)', 'broadcast', '1 conf'];
 
+// Stage durations (ms): [beacon, reveal, settle, sealed].
+// Default: per UI_DESIGN.md §5.3. Fast: ~10× compressed for demos.
+const TIMING_DEFAULT = [800, 1200, 4000, 500] as const;
+const TIMING_FAST = [300, 400, 600, 200] as const;
+
 export function MatchSettleModal({
   match,
   onComplete,
+  fast = false,
 }: {
   match: MatchInfo;
   onComplete: (matchId: number) => void;
+  /** Compressed timing for ?admin=1 / demo runs. */
+  fast?: boolean;
 }): JSX.Element | null {
   const [stage, setStage] = useState<Stage>('beacon');
+  const timing = fast ? TIMING_FAST : TIMING_DEFAULT;
 
   useEffect(() => {
-    const t1 = setTimeout(() => setStage('reveal'), 800);
-    const t2 = setTimeout(() => setStage('settle'), 800 + 1200);
-    const t3 = setTimeout(() => setStage('sealed'), 800 + 1200 + 4000);
-    const t4 = setTimeout(() => {
-      setStage('done');
-      onComplete(match.matchId);
-    }, 800 + 1200 + 4000 + 500);
+    const t1 = setTimeout(() => setStage('reveal'), timing[0]);
+    const t2 = setTimeout(() => setStage('settle'), timing[0] + timing[1]);
+    const t3 = setTimeout(
+      () => setStage('sealed'),
+      timing[0] + timing[1] + timing[2],
+    );
+    const t4 = setTimeout(
+      () => {
+        setStage('done');
+        onComplete(match.matchId);
+      },
+      timing[0] + timing[1] + timing[2] + timing[3],
+    );
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
       clearTimeout(t4);
     };
-  }, [match.matchId, onComplete]);
+    // timing is deterministic from `fast`, so we depend on the primitive.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match.matchId, onComplete, fast]);
 
   if (stage === 'done') return null;
 
@@ -70,7 +87,9 @@ export function MatchSettleModal({
       <AnimatePresence mode="wait">
         {stage === 'beacon' && <BeaconStage key="beacon" />}
         {stage === 'reveal' && <RevealStage key="reveal" match={match} />}
-        {stage === 'settle' && <SettleStage key="settle" match={match} />}
+        {stage === 'settle' && (
+          <SettleStage key="settle" match={match} totalMs={timing[2]} />
+        )}
         {stage === 'sealed' && <SealedStage key="sealed" match={match} />}
       </AnimatePresence>
     </div>
@@ -189,31 +208,41 @@ function CounterpartyCard({
   );
 }
 
-function SettleStage({ match }: { match: MatchInfo }): JSX.Element {
+function SettleStage({
+  match,
+  totalMs,
+}: {
+  match: MatchInfo;
+  totalMs: number;
+}): JSX.Element {
   const [solStep, setSolStep] = useState(0);
   const [btcStep, setBtcStep] = useState(0);
   const [topMsg, setTopMsg] = useState('Ika is signing…');
 
   useEffect(() => {
+    // Three sub-ticks evenly spaced inside the stage window.
+    const a = totalMs * 0.225;
+    const b = totalMs * 0.475;
+    const c = totalMs * 0.75;
     const ids = [
       setTimeout(() => {
         setSolStep(1);
         setBtcStep(1);
         setTopMsg('Encrypt revealed fill.');
-      }, 900),
+      }, a),
       setTimeout(() => {
         setSolStep(2);
         setBtcStep(2);
         setTopMsg('Bitcoin broadcasting…');
-      }, 1900),
+      }, b),
       setTimeout(() => {
         setSolStep(3);
         setBtcStep(3);
         setTopMsg('Confirmed.');
-      }, 3000),
+      }, c),
     ];
     return () => ids.forEach(clearTimeout);
-  }, []);
+  }, [totalMs]);
 
   return (
     <motion.div

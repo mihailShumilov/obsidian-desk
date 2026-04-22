@@ -2,106 +2,171 @@
 
 > The dark pool where Bitcoin never leaves Bitcoin.
 
-Institutional dark-pool DEX on Solana for BTC/USDC.
-- **Encrypted orderbook** — orders submitted as FHE ciphertexts via [Encrypt](https://docs.encrypt.xyz). No leakage to validators or indexers.
-- **Native BTC settlement** — funds move on Bitcoin via [Ika](https://docs.ika.xyz) dWallets (2PC-MPC). No bridges, no wrapped BTC.
+Institutional dark-pool DEX on Solana for BTC / USDC.
+Encrypted orderbook (FHE, [Encrypt](https://docs.encrypt.xyz)) + native BTC settlement ([Ika](https://docs.ika.xyz) dWallets). No bridges. No wrapped BTC. No plaintext orderbook.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and [`docs/INSTRUCTIONS.md`](docs/INSTRUCTIONS.md) for the 6-week build plan.
+**Demo URL:** _to be added after Vercel deploy (P10)_
+**Devnet program:** `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`
+
+## The problem
+
+Every crypto dark pool today breaks on one of three axes:
+
+1. **Orders leak.** Every L2 orderbook is a strategy leak. Validators, indexers, MEV searchers — they all see your price, size, and timing. The market front-runs you before you fill.
+2. **Bridges break.** Wrapped BTC depends on a custodian or a cross-chain proof you can't audit. Every bridge is a single point of catastrophic failure.
+3. **Custodians control.** If a venue holds your keys, it holds your fate. Withdrawal pauses, frozen assets, KYC creep — all downstream of custody.
+
+ObsidianDesk picks the two technologies that fix all three: FHE for the orderbook, and native MPC signing for settlement.
+
+## Target users
+
+- **Institutional OTC desks** moving >$500K at a time who can't broadcast their intent.
+- **Bitcoin-native funds** that refuse to touch wrapped BTC for policy reasons.
+- **Self-custodial traders** willing to trade a small latency premium for strategy privacy.
+
+## Why Ika *and* Encrypt
+
+Neither alone is enough — and each collapses the other's threat model when removed:
+
+| Remove … | What happens | Resulting product |
+|---|---|---|
+| **Encrypt** | The orderbook becomes plaintext on chain. Watchers replay strategies in real time. | A Solana DEX with a public book. Uniswap already exists. |
+| **Ika** | BTC must be wrapped, bridged, or escrowed. Custodian + trust assumptions come back. | A synthetic-BTC venue. wBTC already exists. |
+
+The combination is where the differentiator lives: **private book + native settlement**.
+
+## Architecture
+
+```
+ ┌─────────┐  encrypt order   ┌───────────────┐   FHE compare    ┌─────────┐   co-sign BTC   ┌─────────┐
+ │ Trader  │ ───────────────▶ │ Solana program│ ───────────────▶ │ Encrypt │ ──────────────▶ │   Ika   │ ──▶ signed BTC tx
+ └─────────┘                  │ (obsidian-core)│                  │  MPC    │                 │ dWallet │
+                              └───────────────┘                  └─────────┘                 └─────────┘
+                                     │                                                            │
+                                     └────────────── MatchRecord + btc_tx_proof ──────────────────┘
+```
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and [`docs/UI_DESIGN.md`](docs/UI_DESIGN.md) for the design system.
 
 ## Stack
-- Solana program: Rust 1.93 + Anchor 0.32+ (`programs/obsidian-core`)
-- Frontend: Next.js 16.2 (App Router) + React 18.3 + TypeScript 5.9 strict (`app/`)
-- SDK: shared TS adapters over Encrypt + Ika (`sdk/`)
-- Keeper: Node.js 24 cron poller for matching/settlement (`keeper/`)
-- Bitcoin: signet for testnet settlement (mempool.space)
-- Tooling: pnpm 9 workspaces, Solana CLI (Agave)
+
+| Layer | Tech |
+|---|---|
+| Solana program | Rust 1.93 + Anchor 0.32.1 (`programs/obsidian-core`) |
+| Shared SDK | TypeScript 5.9 (`sdk/`) — adapters for Encrypt + Ika + bitcoinjs-lib |
+| Frontend | Next.js 16.2 App Router + React 18.3 + Tailwind 3.4 (`app/`) |
+| Keeper bot | Node.js 24 daemon (`keeper/`) |
+| Bitcoin | signet via mempool.space esplora |
+| Tooling | pnpm 9 workspaces, Solana CLI (Agave), Anchor |
 
 ## Prerequisites
+
 - Node.js 24+
-- pnpm 9+ (`corepack enable && corepack prepare pnpm@9 --activate`)
+- pnpm 9+ (`corepack enable && corepack prepare pnpm@9.15.4 --activate`)
 - Rust 1.93 stable (`rustup default stable`)
 - Solana CLI latest (Agave): `sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"`
 - Anchor 0.32+: `avm install 0.32.1 && avm use 0.32.1`
 
-## Quick start (local dev — no Docker)
-```bash
-pnpm install
-pnpm typecheck
-pnpm build
-anchor build
-pnpm dev          # runs app on :13000 + keeper concurrently
-```
+## Run it locally
 
-### Run the e2e test suite
 ```bash
-# 1. start a local validator on the project's non-standard port
+# 1. Install deps across all workspaces
+pnpm install
+
+# 2. Typecheck everything
+pnpm -F @obsidian-desk/sdk build   # emits sdk/dist so workspace deps resolve
+pnpm typecheck
+
+# 3. Boot a local validator on the project's non-standard port
 solana-test-validator --rpc-port 18899 --bind-address 127.0.0.1 --reset
 
-# 2. in a second terminal, run anchor against the running validator
-anchor build && anchor deploy --provider.cluster http://127.0.0.1:18899
-anchor test --skip-local-validator
+# 4. Build + deploy the program against the running validator
+anchor build
+anchor deploy --provider.cluster http://127.0.0.1:18899
+
+# 5. (Optional) Seed a demo market + dWallets + 8 encrypted orders
+ANCHOR_PROVIDER_URL=http://127.0.0.1:18899 \
+  ANCHOR_WALLET=~/.config/solana/id.json \
+  pnpm exec tsx scripts/seed-demo.ts
+
+# 6. Boot the UI + keeper concurrently
+pnpm dev
+open http://127.0.0.1:13000         # landing
+open http://127.0.0.1:13000/trade   # terminal
+open http://127.0.0.1:13000/trade?admin=1   # + Match-all + Fast-forward
 ```
 
-> **Port note:** all services bind to non-standard host ports to avoid collision with other local Docker projects. App: `13000`, keeper status: `13001`, Solana validator RPC: `18899`. Full mapping in `docker-compose.yml` once P10 lands.
+> **Port scheme:** non-standard on purpose so the stack never collides with other local Docker projects. App `:13000`, keeper status `:13001`, Solana validator RPC `:18899`. Full mapping lands in `docker-compose.yml` with P10.
 
-### Frontend visual QA
-The visual test surface (covers every custom component + token) is at <http://127.0.0.1:13000/kitchen>.
+## Run the tests
 
-## Layout
+```bash
+# SDK unit tests (26 tests, ~120ms, zero network)
+pnpm -F @obsidian-desk/sdk test
+
+# Anchor + e2e (requires the manually-started validator from step 3 above)
+anchor test --skip-local-validator
+#   ├─ obsidian-core.ts         — program unit tests
+#   ├─ e2e-submit.ts            — encrypt → submit → byte-equality
+#   ├─ e2e-settlement.ts        — one-leg mock settlement (P4)
+#   └─ e2e-full.ts              — two-leg Alice/Bob settlement (P9)
+```
+
+## Demo flow
+
+1. **Onboard:** visit `/deposit`, click _Generate dWallet_ → step 2 shows a signet address + QR. Fund it, wait for the 15 s esplora poll, then _Lock_ to ObsidianDesk.
+2. **Seal:** visit `/trade`, type a price + size, click _Encrypt & Seal_ → watch the 1.8 s choreography (button progress bar → scramble → envelope collapse → shoot-up → toast).
+3. **Match:** click _Try Match_ in the header (or _Match all_ in `?admin=1`) → full match/settle modal plays: Beacon → Reveal counterparties → Settlement panels w/ Solana + Bitcoin progress → Sealed notification.
+4. **Verify:** the `/positions` row flips to _Settled_; keeper logs `[keeper] settled match N at …`.
+
+## Repository layout
+
 ```
 programs/obsidian-core/   Anchor program (Rust)
+sdk/                      Shared TS SDK (encrypt + ika + btc adapters)
 app/                      Next.js 16.2 frontend
-  app/                    routes (/, /trade, /deposit, /positions, /about, /kitchen, /api/health)
-  components/obsidian/    custom design-system primitives
-  components/ui/          Button + Card (cva variants)
-  components/shell/       Header + Footer + Logo + WalletButton
-sdk/                      TS SDK (Encrypt + Ika + BTC adapters)
-keeper/                   Matching + settlement keeper bot
-scripts/                  Deploy / airdrop / seed
-tests/                    Integration + E2E tests
-docs/                     Authoritative project docs
+  app/                    routes: /, /trade, /deposit, /positions, /about, /kitchen, /api/health
+  components/obsidian/    design-system primitives (Cipher, OrderbookVoid, …)
+  components/landing/     BookCube 3D + landing sections
+  components/trade/       PriceChart, OrderForm, YourOrders, MatchSettleModal
+  components/deposit/     wizard (ProgressRail, StepShell, KeyShards, …)
+  components/shell/       Header + Footer + DWalletChip + WalletButton
+  stores/                 dWallet + order-state zustand stores
+keeper/                   Matching + settlement keeper bot (daemon)
+scripts/                  Deploy / airdrop / seed-demo
+tests/                    Integration + E2E tests (mocha + @coral-xyz/anchor)
+docs/                     Authoritative project docs (6 files)
 docs/vendor/              Vendored Encrypt + Ika SDK references
 ```
 
-## What's running today
+## P-prompt progress
 
-**Solana program (`programs/obsidian-core`)** — `MarketState`, `EncryptedOrder` (linked-list of active orders, ciphertext blobs as `Vec<u8>`), `MatchIntent`, `MatchRecord`. Seven instructions: `initialize_market`, `submit_order`, `cancel_order`, `try_match`, `request_settlement`, `finalize_settlement`, `fail_settlement`. P2 mock-CPI adapter at `encrypt_cpi.rs` — gets swapped for real `execute_graph` CPI in a later prompt.
+Driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md).
 
-**SDK (`sdk/src`)**
-- `encrypt.ts` — mock-mode FHE wrapper. Each ciphertext is a 32-byte tagged blob (`encryptOrder` returns `{side_ct, price_ct, size_ct, nonce}`). Real-mode falls through to `VendorSDKUnavailableError` (gap E5).
-- `ika.ts` — mock-mode dWallet store with real P2WPKH key generation, policy locking, and PSBT signing via `bitcoinjs-lib`. Real Ika DKG/gRPC unblocked in P9 (gap I0).
-- `btc.ts` — bitcoinjs-lib v7 PSBT builder (signet/testnet). `buildSpendTx` does P2WPKH input/output with vbyte fee estimation, `signAndFinalize`, `scriptForAddress`.
-- 26 unit tests via `node --test --experimental-strip-types`.
-
-**Keeper (`keeper/src`)** — `pollOnce(program, options)` pure function fetches `MatchRecord` PDAs with `settle_status = Pending`, builds + signs the BTC tx via the SDK, calls `finalize_settlement` (or `fail_settlement` on error). Daemon entrypoint exposes `/status` JSON on `:13001`. SDK namespaces are dependency-injected so the e2e test can share its in-process mock store.
-
-**Frontend (`app/`)** — full design system per `docs/UI_DESIGN.md`:
-- 7 custom obsidian components (`Cipher`, `CipherField`, `ChainBadge`, `DWalletCard`, `MatchBeacon`, `SettleThread`, `OrderbookVoid`)
-- 6 routes: `/` (landing stub w/ cube placeholder), `/trade` (3-col stub), `/deposit` (working 3-step wizard via Server Actions), `/positions` (status-badge table stub), `/about`, `/kitchen` (visual QA)
-- `/api/health` for Docker
-- Phantom wallet adapter wired to local validator (`http://127.0.0.1:18899` by default; override with `NEXT_PUBLIC_SOLANA_RPC`)
-
-## Status
-Roadmap is driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md).
-
-- [x] **P1** — monorepo scaffold, workspace boots, stub program builds (`62d42c4`)
-- [x] **P2** — Anchor program with FHE-typed accounts and instructions (`2f7c39a`)
-- [x] **P3** — Encrypt SDK integration (client-side encryption, mock mode) (`427d1e5`)
-- [x] **P4** — Ika dWallet integration + BTC tx builder + keeper + e2e settlement (`6d9ce5c`)
+- [x] **P1** — Monorepo scaffold (`62d42c4`)
+- [x] **P2** — Anchor program with FHE-shaped accounts (`2f7c39a`)
+- [x] **P3** — Encrypt SDK + mock-mode ciphertexts (`427d1e5`)
+- [x] **P4** — Ika dWallet adapter + BTC tx builder + keeper + e2e settlement (`6d9ce5c`)
 - [x] **P5** — Next.js shell + obsidian design system (`fe50380`)
 - [x] **P6** — Landing wow hero: 3D cube + 6 sections (`99d62e3`)
-- [x] **P7** — Trade terminal: book + chart + submit choreography + match modal (`b13dca4`)
-- [x] **P8** — Deposit wizard polish: persisted state, esplora poll, header chip (`c990d30`)
-- [ ] P9 — Real Ika DKG + SPV proof + keeper hardening + demo script
+- [x] **P7** — Trade terminal + match/settle modal (`b13dca4`)
+- [x] **P8** — Deposit wizard polish: persisted state + esplora poll (`c990d30`)
+- [x] **P9** — E2E + keeper metrics + admin mode + seed-demo (this commit)
 - [ ] P10 — Dockerization (full stack)
 - [ ] P11 — Final README + deployment guide
 
 ## Known gaps
-Tracked in [`docs/gaps.md`](docs/gaps.md). High-impact items:
-- **E0** — `CT_MAX = 3000` (not the spec's 4096) due to Solana's 10240B CPI realloc cap.
-- **E1** — ciphertexts are inline `Vec<u8>` on `EncryptedOrder`; real Encrypt models them as 100B keypair accounts. Refactor planned.
-- **E5 / I0** — upstream Encrypt + Ika TS clients ship uncompiled `.ts` in their published `exports`, which Node 24 won't strip from `node_modules`. Both adapters force `mock` mode and surface a `VendorSDKUnavailableError` if real mode is requested.
-- **I2** — Ika mock store is process-local. The e2e test injects its own SDK namespace into the keeper to share state.
+
+Tracked in [`docs/gaps.md`](docs/gaps.md). High-impact items for reviewers:
+
+| ID | What | Impact | Fix |
+|---|---|---|---|
+| **E0** | `CT_MAX = 3000` (not 4096) | Solana 10240 B CPI realloc cap forced the smaller blob size | Accepted; real Encrypt uses keypair accounts (gap E1) |
+| **E1** | Ciphertexts are inline `Vec<u8>` on `EncryptedOrder` | Real Encrypt models CTs as 100 B keypair accounts owned by the Encrypt program | Refactor when vendor package compiles |
+| **E5 / I0** | Upstream Encrypt + Ika TS clients ship uncompiled `.ts` in node_modules | Node 24 won't strip `.ts` from node_modules → real-mode unavailable | `mock` mode used everywhere; wrapper throws `VendorSDKUnavailableError` if you force `real` |
+| **I2** | Ika mock store is process-local | Keeper can't see frontend-minted dWallets out of the box | E2E tests inject the same SDK instance into the keeper; real Ika will use a persistent gRPC backend |
+| **I3** | `finalize_settlement` is permissionless | Anyone with a signed BTC tx hex can mark a match settled | Fix with SPV proof verification + keeper authority PDA in P9 continuation |
 
 ## License
+
 MIT (TBD — confirm before submission).

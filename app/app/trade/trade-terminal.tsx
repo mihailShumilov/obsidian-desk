@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { encrypt } from '@obsidian-desk/sdk';
 import { Button } from '@/components/ui/button';
@@ -61,6 +62,13 @@ export function TradeTerminal(): JSX.Element {
   const [match, setMatch] = useState<MatchInfo | null>(null);
   const matchCounter = useRef(0);
 
+  // ?admin=1 unlocks demo helpers (Match all, Fast-forward).
+  // Read once on mount; URL changes after that don't toggle the panel.
+  const params = useSearchParams();
+  const adminMode = params?.get('admin') === '1';
+  const [fastSettle, setFastSettle] = useState(false);
+  const matchQueueRef = useRef<string[]>([]);
+
   const yourIds = useMemo(
     () => new Set(yourOrders.map((o) => o.id)),
     [yourOrders],
@@ -94,10 +102,9 @@ export function TradeTerminal(): JSX.Element {
     setTimeout(() => setToast(null), 4000);
   }
 
-  function handleTryMatch(): void {
-    const sealed = yourOrders.filter((o) => o.status === 'sealed');
-    if (sealed.length === 0) return;
-    const target = sealed[0]!;
+  function startMatch(targetId: string): void {
+    const target = yourOrders.find((o) => o.id === targetId);
+    if (!target || target.status !== 'sealed') return;
     setStatus(target.id, 'matched');
 
     matchCounter.current += 1;
@@ -117,17 +124,49 @@ export function TradeTerminal(): JSX.Element {
     };
     setMatch(info);
 
-    // Transition statuses through the modal arc so the YourOrders table
-    // stays in sync with what the modal shows.
-    setTimeout(() => setStatus(target.id, 'settling'), 800 + 1200);
-    setTimeout(() => setStatus(target.id, 'settled'), 800 + 1200 + 4000);
+    // Track per-modal-stage timing so YourOrders stays in sync.
+    const settleAt = (fastSettle ? 300 : 800) + (fastSettle ? 400 : 1200);
+    const sealedAt = settleAt + (fastSettle ? 600 : 4000);
+    setTimeout(() => setStatus(target.id, 'settling'), settleAt);
+    setTimeout(() => setStatus(target.id, 'settled'), sealedAt);
+  }
+
+  function handleTryMatch(): void {
+    const sealed = yourOrders.filter((o) => o.status === 'sealed');
+    if (sealed.length === 0) return;
+    startMatch(sealed[0]!.id);
+  }
+
+  function handleMatchAll(): void {
+    const sealed = yourOrders.filter((o) => o.status === 'sealed');
+    if (sealed.length === 0) return;
+    // Drain via the queue: kick off the first now, the rest after each
+    // modal closes via onComplete below.
+    matchQueueRef.current = sealed.slice(1).map((o) => o.id);
+    startMatch(sealed[0]!.id);
+  }
+
+  function handleMatchComplete(): void {
+    setMatch(null);
+    const next = matchQueueRef.current.shift();
+    if (next) {
+      // Tiny gap so the modal unmount + remount feels intentional.
+      setTimeout(() => startMatch(next), 150);
+    }
   }
 
   const canSubmit = wallet.connected;
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-8">
-      <Header onTryMatch={handleTryMatch} canTry={yourOrders.some((o) => o.status === 'sealed')} />
+      <Header
+        onTryMatch={handleTryMatch}
+        canTry={yourOrders.some((o) => o.status === 'sealed')}
+        adminMode={adminMode}
+        onMatchAll={handleMatchAll}
+        fastSettle={fastSettle}
+        onToggleFast={() => setFastSettle((v) => !v)}
+      />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(260px,0.9fr)_minmax(480px,1.5fr)_minmax(300px,1fr)]">
         {/* Left — encrypted book */}
@@ -208,7 +247,8 @@ export function TradeTerminal(): JSX.Element {
       {match && (
         <MatchSettleModal
           match={match}
-          onComplete={() => setMatch(null)}
+          onComplete={handleMatchComplete}
+          fast={fastSettle}
         />
       )}
     </main>
@@ -218,26 +258,65 @@ export function TradeTerminal(): JSX.Element {
 function Header({
   onTryMatch,
   canTry,
+  adminMode,
+  onMatchAll,
+  fastSettle,
+  onToggleFast,
 }: {
   onTryMatch: () => void;
   canTry: boolean;
+  adminMode: boolean;
+  onMatchAll: () => void;
+  fastSettle: boolean;
+  onToggleFast: () => void;
 }): JSX.Element {
   return (
-    <div className="mb-6 flex items-center justify-between">
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 className="text-2xl font-semibold tracking-tightest">BTC / USDC</h1>
         <p className="text-xs uppercase tracking-widest text-muted">
-          Encrypted book · Devnet
+          Encrypted book · Devnet{adminMode ? ' · admin' : ''}
         </p>
       </div>
-      <Button
-        variant={canTry ? 'primary' : 'secondary'}
-        onClick={onTryMatch}
-        disabled={!canTry}
-        title={canTry ? 'Force-match your oldest sealed order' : 'Seal an order first'}
-      >
-        Try Match
-      </Button>
+      <div className="flex items-center gap-2">
+        {adminMode && (
+          <>
+            <button
+              type="button"
+              onClick={onToggleFast}
+              className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs uppercase tracking-widest transition-colors ${
+                fastSettle
+                  ? 'border-cipher-cyan/60 bg-cipher-cyan/15 text-cipher-cyan'
+                  : 'border-obsidian-700 text-muted hover:text-foreground'
+              }`}
+              title="Compress the §5.3 modal timing (10× faster) for demo runs"
+            >
+              <span
+                className={`size-1.5 rounded-full ${
+                  fastSettle ? 'bg-cipher-cyan' : 'bg-obsidian-600'
+                }`}
+              />
+              Fast
+            </button>
+            <Button
+              variant="secondary"
+              onClick={onMatchAll}
+              disabled={!canTry}
+              title="Drain every sealed order through the §5.3 modal back-to-back"
+            >
+              Match all
+            </Button>
+          </>
+        )}
+        <Button
+          variant={canTry ? 'primary' : 'secondary'}
+          onClick={onTryMatch}
+          disabled={!canTry}
+          title={canTry ? 'Force-match your oldest sealed order' : 'Seal an order first'}
+        >
+          Try Match
+        </Button>
+      </div>
     </div>
   );
 }
