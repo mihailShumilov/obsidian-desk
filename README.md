@@ -10,7 +10,7 @@ Encrypted orderbook (FHE, [Encrypt](https://docs.encrypt.xyz)) + native BTC sett
 [![Solana devnet](https://img.shields.io/badge/solana-devnet-violet.svg)](#whats-deployed-where)
 
 **Devnet program:** `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`
-**Demo URL:** _to be added after Vercel deploy — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)_
+**Live demo:** <https://obsidiandesk.app> (devnet; see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) §6 for the self-hosted VPS + Cloudflare setup)
 
 ## Table of contents
 

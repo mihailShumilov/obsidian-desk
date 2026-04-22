@@ -291,14 +291,14 @@ apt update && apt install -y caddy
 `/etc/caddy/Caddyfile`:
 
 ```caddyfile
-obsidiandesk.example.com {
+obsidiandesk.app {
     encode zstd gzip
     reverse_proxy 127.0.0.1:13000
 }
 
 # Optional — expose the keeper /status JSON on its own subdomain.
 # Leave commented-out if you want the keeper strictly internal.
-# keeper.obsidiandesk.example.com {
+# keeper.obsidiandesk.app {
 #     reverse_proxy 127.0.0.1:13001
 # }
 ```
@@ -310,12 +310,13 @@ journalctl -u caddy -n 50 | grep -i 'certificate obtained'
 
 ### 6.8 Cloudflare DNS + SSL mode
 
-In the Cloudflare dashboard for `example.com`:
+In the Cloudflare dashboard for the `obsidiandesk.app` zone:
 
 1. **DNS → Records**
-   - `A` record: name `obsidiandesk`, IPv4 = VPS public IP, **Proxy status: Proxied** (orange cloud).
-   - `AAAA` record (if your VPS has IPv6): same name, same proxy setting.
-   - Repeat for any `keeper.obsidiandesk` subdomain you exposed in step 6.7.
+   - `A` record: name `@` (apex), IPv4 = VPS public IP, **Proxy status: Proxied** (orange cloud). Cloudflare will serve the site at `obsidiandesk.app`.
+   - `CNAME` record: name `www`, target `obsidiandesk.app`, Proxied — for the `www.obsidiandesk.app` redirect handled at the Caddy site block.
+   - `AAAA` record (if your VPS has IPv6): name `@`, same proxy setting.
+   - `A`/`AAAA` record: name `keeper`, same IP, Proxied — only if you exposed the keeper subdomain in step 6.7. Otherwise leave the keeper strictly internal.
 2. **SSL/TLS → Overview** → set mode to **Full (strict)**. Never ship `Flexible` — it terminates TLS at the edge and talks to your origin in plaintext.
 3. **SSL/TLS → Edge Certificates** → enable `Always Use HTTPS` and `Automatic HTTPS Rewrites`.
 4. **Caching → Cache Rules** → add a rule that bypasses cache for `/api/*` and any path containing `_next/data` — server-rendered content and the health endpoint must not be edge-cached.
@@ -327,7 +328,7 @@ Optional lockdown — swap Let's Encrypt for a **Cloudflare Origin CA** cert if 
 - Replace the Caddyfile site with:
 
   ```caddyfile
-  obsidiandesk.example.com {
+  obsidiandesk.app {
       tls /etc/caddy/origin.pem /etc/caddy/origin.key
       reverse_proxy 127.0.0.1:13000
   }
@@ -339,14 +340,14 @@ Optional lockdown — swap Let's Encrypt for a **Cloudflare Origin CA** cert if 
 
 ```bash
 # DNS resolves through Cloudflare (expect CF edge IPs, not the VPS IP)
-dig +short obsidiandesk.example.com
+dig +short obsidiandesk.app
 
 # TLS terminates cleanly, CF proxy stamps cf-ray
-curl -I https://obsidiandesk.example.com/api/health
+curl -I https://obsidiandesk.app/api/health
 # expected: HTTP/2 200, cf-ray: <hex>-<airport-code>
 ```
 
-Browser check: open `https://obsidiandesk.example.com`, connect a Phantom wallet on devnet, confirm the network chip reads `devnet`, the Depth card renders, the deposit wizard opens.
+Browser check: open `https://obsidiandesk.app`, connect a Phantom wallet on devnet, confirm the network chip reads `devnet`, the Depth card renders, the deposit wizard opens.
 
 ### 6.10 Updates and rollback
 
@@ -374,7 +375,7 @@ curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloud
 sudo dpkg -i cloudflared.deb
 cloudflared tunnel login                          # browser auth
 cloudflared tunnel create obsidian-desk
-cloudflared tunnel route dns obsidian-desk obsidiandesk.example.com
+cloudflared tunnel route dns obsidian-desk obsidiandesk.app
 ```
 
 `~/.cloudflared/config.yml`:
@@ -383,9 +384,9 @@ cloudflared tunnel route dns obsidian-desk obsidiandesk.example.com
 tunnel: <tunnel-uuid>
 credentials-file: /home/obsidian/.cloudflared/<tunnel-uuid>.json
 ingress:
-  - hostname: obsidiandesk.example.com
+  - hostname: obsidiandesk.app
     service: http://127.0.0.1:13000
-  - hostname: keeper.obsidiandesk.example.com
+  - hostname: keeper.obsidiandesk.app
     service: http://127.0.0.1:13001
   - service: http_status:404
 ```
