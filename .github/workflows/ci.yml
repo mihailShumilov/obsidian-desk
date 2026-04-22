@@ -25,6 +25,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      # SDK must be built first — keeper + app import `@obsidian-desk/sdk`
+      # whose types come from `sdk/dist/index.d.ts`. On a clean CI checkout
+      # that file doesn't exist until the SDK is compiled, so plain
+      # `pnpm -r typecheck` would fail with TS2307 in keeper/app.
+      - run: pnpm -F @obsidian-desk/sdk build
       - run: pnpm -r typecheck
       - run: pnpm -r build
 
