@@ -26,9 +26,11 @@
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
+    "test": "node --test --experimental-strip-types --no-warnings tests/*.test.ts",
     "clean": "rm -rf dist"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "typescript": "5.9.2"
   }
 }

@@ -6,7 +6,12 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "lib": ["ES2022"]
+    "lib": ["ES2022"],
+    // Source files use explicit `.ts` extensions on relative imports so
+    // Node 24's native TS strip can run them directly (without a loader).
+    // tsc rewrites these to `.js` in the dist/ output.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules"]

@@ -1,4 +1,4 @@
-import { NotImplementedError } from './errors.js';
+import { NotImplementedError } from './errors.ts';
 
 export type Chain = 'bitcoin' | 'bitcoin-signet' | 'bitcoin-testnet';
 

@@ -85,6 +85,44 @@ instructions:
   - `finalize_decryption(match_id)` — after the decryptor responds, reads the
     plaintext and writes the `MatchRecord`. Triggered by the keeper.
 
+### E5. Upstream TS client `@encrypt.xyz/pre-alpha-solana-client` is unconsumable by Node 24
+**Where:** `sdk/src/encrypt.ts` — real-mode entry points throw
+`VendorSDKUnavailableError` instead of dispatching to the upstream gRPC
+client.
+
+**Reality:** The published package
+(`https://www.npmjs.com/package/@encrypt.xyz/pre-alpha-solana-client`,
+v0.1.0) declares its `exports."./grpc"` as `./src/grpc.ts` — an
+**uncompiled TypeScript file**. The package's `dist/` directory only
+contains the Codama-generated on-chain instruction bindings; the gRPC
+client (which is what we actually need for `createInput` and
+`readCiphertext`) ships only as `.ts`. Node 24's native TS strip refuses
+to handle `.ts` files inside `node_modules/`, raising
+`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`. The package
+README/install instructions assume a `bun add` consumer; bun can run TS
+inside `node_modules` natively.
+
+**Why deviate now:** the prompt's "DO NOT invent missing primitives"
+rule applies — we surface a clean `UnsupportedOperation` (via
+`VendorSDKUnavailableError`) and document the gap rather than vendoring
+the upstream. Mock mode satisfies the entire P3 acceptance set
+(round-trip, e2e submit, debug CLI) without the broken real-mode code
+path.
+
+**Closure plan:**
+1. Preferred: file an issue with `dwallet-labs/encrypt-pre-alpha`
+   asking them to ship compiled `dist/grpc/index.{js,d.ts}` and update
+   `exports."./grpc"` to point there. Once available, our `encrypt.ts`
+   real-mode branches dynamic-import the package and call
+   `createInput` + `readCiphertext` directly.
+2. Stopgap: vendor `src/grpc.ts` (~189 lines) and the protobuf-generated
+   service into `sdk/src/encrypt-grpc/`, depend directly on
+   `@grpc/grpc-js` + `@bufbuild/protobuf`. Adds ~200 LOC of vendored
+   code; keep behind the same `OBSIDIAN_ENCRYPT_MODE=real` flag.
+3. Stopgap: ship a Docker mock gRPC server (P10's `encrypt-mock`) that
+   speaks the same protobuf service, so e2e tests have a real network
+   target without touching upstream's TS distribution.
+
 ### E4. Multi-output FHE decrypt vs. one DecryptionRequest per ciphertext
 **Where:** `request_threshold_decrypt(can_match_ct, fill_size_ct, clearing_price_ct)`
 returns all three plaintexts in one struct.

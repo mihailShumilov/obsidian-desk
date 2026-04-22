@@ -1,3 +1,3 @@
-export * as encrypt from './encrypt.js';
-export * as ika from './ika.js';
-export * from './errors.js';
+export * as encrypt from './encrypt.ts';
+export * as ika from './ika.ts';
+export * from './errors.ts';
