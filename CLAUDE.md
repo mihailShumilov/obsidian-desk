@@ -19,7 +19,10 @@ Before generating ANY code, re-read the relevant prompt from docs/PROMPTS.md and
 - Node.js 24 LTS, pnpm 9+
 - Rust 1.93 stable, Anchor 0.31+
 - Solana CLI latest via Anza installer (Agave), solana-validator image: anzaxyz/agave:latest
-- Next.js 16.2 (App Router, output: "standalone"), React 18.3, TypeScript 5.9 strict
+- Next.js 16.2 (App Router, output: "standalone"), React 19.1+, TypeScript 5.9 strict
+  - Next 16 ships React 19.3-canary to the client regardless of the app's declared `react` version. The app MUST be on React 19 — with React 18 declared, `react-reconciler@0.27.0` (pulled by `@react-three/fiber` v8) tries to read `React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentBatchConfig`, which React 19 renamed away, and the whole client crashes to "This page couldn't load".
+  - Matching deps: `@react-three/fiber@^9`, `@react-three/drei@^10`, `@types/react@^19`, `@types/react-dom@^19`.
+  - React 19 also drops the global `JSX` namespace — `app/global.d.ts` re-exports it from `react` so existing `JSX.Element` annotations still compile.
 - Bitcoin: signet via mempool.space
 
 ## Workflow
