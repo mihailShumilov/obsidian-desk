@@ -6,7 +6,7 @@ Institutional dark-pool DEX on Solana for BTC / USDC.
 Encrypted orderbook (FHE, [Encrypt](https://docs.encrypt.xyz)) + native BTC settlement ([Ika](https://docs.ika.xyz) dWallets). No bridges. No wrapped BTC. No plaintext orderbook.
 
 [![CI](https://github.com/mihailShumilov/obsidian-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/mihailShumilov/obsidian-desk/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-cipher.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/license-proprietary-cipher.svg)](LICENSE)
 [![Solana devnet](https://img.shields.io/badge/solana-devnet-violet.svg)](#whats-deployed-where)
 
 **Devnet program:** `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`
@@ -366,4 +366,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branching, commit conventions, and 
 
 ## License
 
-[MIT](LICENSE).
+Proprietary — Copyright (c) 2026 Mihail Shumilov. All rights reserved. See [`LICENSE`](LICENSE). No use, copying, modification, or redistribution is permitted without prior written permission of the copyright holder.

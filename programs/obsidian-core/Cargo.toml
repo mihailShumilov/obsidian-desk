@@ -3,7 +3,8 @@ name = "obsidian-core"
 version = "0.1.0"
 description = "ObsidianDesk core — encrypted limit orderbook with FHE matching (Encrypt) and dWallet settlement (Ika)."
 edition = "2021"
-license = "MIT"
+license-file = "../../LICENSE"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]
