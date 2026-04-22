@@ -20,6 +20,10 @@ pub enum ErrorCode {
     InvalidMatchId,
     #[msg("Match has already been settled")]
     AlreadyMatched,
+    #[msg("MatchRecord is not in Pending settle status")]
+    SettleNotPending,
+    #[msg("BTC tx proof exceeds BTC_TX_PROOF_MAX bytes")]
+    BtcProofTooLarge,
     #[msg("Arithmetic overflow")]
     ArithmeticOverflow,
 }

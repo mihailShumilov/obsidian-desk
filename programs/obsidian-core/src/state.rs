@@ -14,6 +14,11 @@ pub const CT_MAX: usize = 3000;
 /// because it's the only large field in the struct, so the prompt's 4096 fits.
 pub const TOTAL_VOLUME_CT_MAX: usize = 4096;
 
+/// Max size of a Bitcoin tx-proof blob persisted on `MatchRecord`. 1024 B
+/// comfortably covers a confirmed signet tx hex + an SPV / merkle inclusion
+/// stub for P9. Singleton on the account (no realloc-cap pressure).
+pub const BTC_TX_PROOF_MAX: usize = 1024;
+
 /// Orderbook depth ceiling for the hackathon MVP (ARCHITECTURE.md §8).
 pub const MAX_ACTIVE_ORDERS: u8 = 16;
 
@@ -111,4 +116,10 @@ pub struct MatchRecord {
     pub settle_status: SettleStatus,
     pub created_at: i64,
     pub bump: u8,
+    /// Set by `finalize_settlement` once the keeper has broadcast and
+    /// confirmed the BTC tx. Empty until then.
+    #[max_len(BTC_TX_PROOF_MAX)]
+    pub btc_tx_proof: Vec<u8>,
+    /// 0 until `finalize_settlement` runs.
+    pub finalized_at: i64,
 }

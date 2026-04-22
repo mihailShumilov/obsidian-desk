@@ -1,0 +1,20 @@
+import { DepositWizard } from './deposit-wizard';
+
+export const metadata = {
+  title: 'Deposit · ObsidianDesk',
+};
+
+export default function DepositPage() {
+  return (
+    <main className="mx-auto max-w-2xl p-8">
+      <h1 className="text-3xl font-semibold tracking-tight">Onboard</h1>
+      <p className="mt-2 text-sm text-muted">
+        Three steps. The dark pool unlocks once your dWallet is locked to
+        ObsidianDesk.
+      </p>
+      <div className="mt-8">
+        <DepositWizard />
+      </div>
+    </main>
+  );
+}

@@ -137,4 +137,71 @@ pairs on `MatchIntent`; compose them into the `MatchRecord` in
 
 ## Ika
 
-(Empty — gaps will land when P4 starts.)
+### I0. Upstream TS client `@ika.xyz/pre-alpha-solana-client` is unconsumable by Node 24
+**Where:** `sdk/src/ika.ts` real-mode entry points throw
+`VendorSDKUnavailableError`.
+
+**Reality:** Same packaging bug as Encrypt's gap E5. The Ika TS client v0.1.0
+ships only uncompiled `.ts` files (`src/grpc.ts`, `src/grpc-web.ts`,
+`src/generated/...`). Its `package.json` `exports` point at those `.ts`
+sources. Node 24 refuses to strip TypeScript from `node_modules`
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). Both upstream packages
+target the bun runtime which handles `.ts` in `node_modules` natively.
+
+**Why deviate now:** "DO NOT invent missing primitives" — we surface a clean
+`VendorSDKUnavailableError` and ship a deterministic mock that satisfies
+P4's full e2e settlement loop.
+
+**Closure plan:** identical to E5 — file an upstream issue asking for
+compiled `dist/` output, OR vendor `grpc.ts` (~200 LOC) into the SDK, OR
+add a Docker mock gRPC service in P10 that speaks the same protobuf API.
+
+### I1. No real DKG (distributed key generation) without network access
+**Where:** mock `createDWallet` synthesizes a P2WPKH key locally with
+`bitcoinjs-lib`.
+
+**Reality:** Real Ika dWallets are 2PC-MPC shares — neither user nor
+network can sign alone. DKG is an interactive multi-round MPC ceremony
+requiring gRPC contact with the Ika network at
+`pre-alpha-dev-1.ika.ika-network.net:443`.
+
+**Why deviate now:** local mock keeps tests offline + deterministic. The
+single-key shortcut is semantically equivalent for "the program emits a
+signed BTC tx" demos.
+
+**Closure plan (P9+):** real-mode `createDWallet` calls Ika gRPC
+`SubmitTransaction(DkgFirstRound)`, polls for the resulting DWallet PDA,
+and returns the derived BTC P2WPKH address.
+
+### I2. Mock dWallet store is process-local and in-memory
+**Where:** `sdk/src/ika.ts` `mockStore: Map<string, MockEntry>`.
+
+**Reality:** the Ika network is the source of truth for dWallets in
+production. The mock substitutes it with a per-process `Map` so tests
+that create + sign in one process work, but the deposit page in the
+Next.js dev server can't share state with a separately-spawned keeper.
+
+**Why deviate now:** simplifies the e2e test to a single mocha process.
+Deposit-page → keeper handoff is not on the P4 acceptance set.
+
+**Closure plan (P8 / P9):** persist mock keys to `~/.obsidian-mock-keys.json`
+(file-locked) so multiple processes can read them. Production Ika lookup
+is on-chain — no shared file needed.
+
+### I3. `finalize_settlement` accepts any signer (no keeper authority)
+**Where:** `programs/obsidian-core/src/lib.rs::FinalizeSettlement`.
+
+**Reality:** the `keeper` account in the Anchor accounts struct is just a
+`Signer<'info>` with no on-chain authority check. Anyone with SOL can
+call `finalize_settlement` and submit arbitrary `btc_tx_proof` bytes.
+
+**Why deviate now:** a single keeper-keypair check still doesn't enforce
+the actual proof's validity — that needs SPV / merkle inclusion verified
+on-chain (deferred to P9 per ARCHITECTURE.md §10). Adding a stub authority
+check would be performance theater.
+
+**Closure plan (P9):** add a real `KeeperAuthority` PDA stored on
+`MarketState`, gate `finalize_settlement` with `has_one = keeper_authority`,
+AND verify the BTC proof via SPV against a header oracle. Both must land
+together — a keeper check without proof verification is worse than nothing
+because it gives a false sense of security.

@@ -12,9 +12,13 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@obsidian-desk/sdk": "workspace:*"
+    "@coral-xyz/anchor": "^0.32.1",
+    "@obsidian-desk/sdk": "workspace:*",
+    "@solana/web3.js": "^1.95.0",
+    "bn.js": "^5.2.1"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.1.6",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
     "typescript": "5.9.2"

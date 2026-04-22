@@ -18,6 +18,10 @@
       "types": "./dist/ika.d.ts",
       "import": "./dist/ika.js"
     },
+    "./btc": {
+      "types": "./dist/btc.d.ts",
+      "import": "./dist/btc.js"
+    },
     "./errors": {
       "types": "./dist/errors.d.ts",
       "import": "./dist/errors.js"
@@ -32,5 +36,10 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "bitcoinjs-lib": "^7.0.1",
+    "ecpair": "^3.0.1",
+    "tiny-secp256k1": "^2.2.4"
   }
 }

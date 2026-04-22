@@ -198,6 +198,8 @@ pub mod obsidian_core {
         record.settle_status = SettleStatus::Pending;
         record.created_at = clock.unix_timestamp;
         record.bump = ctx.bumps.match_record;
+        record.btc_tx_proof = Vec::new();
+        record.finalized_at = 0;
 
         order_a.status = OrderStatus::Matched;
         order_b.status = OrderStatus::Matched;
@@ -213,6 +215,65 @@ pub mod obsidian_core {
             clearing_price_quote: response.clearing_price,
             seller_dwallet: record.seller_dwallet,
             buyer_dwallet: record.buyer_dwallet,
+        });
+        Ok(())
+    }
+
+    /// Called by the Ika keeper after broadcasting + 1-conf of the BTC
+    /// settlement tx. Persists the proof blob, marks the MatchRecord
+    /// settled, and emits SettleFinalized.
+    pub fn finalize_settlement(
+        ctx: Context<FinalizeSettlement>,
+        _match_id: u64,
+        btc_tx_proof: Vec<u8>,
+    ) -> Result<()> {
+        require!(
+            btc_tx_proof.len() <= state::BTC_TX_PROOF_MAX,
+            ErrorCode::BtcProofTooLarge,
+        );
+        let record = &mut ctx.accounts.match_record;
+        require!(
+            record.settle_status == SettleStatus::Pending,
+            ErrorCode::SettleNotPending,
+        );
+        let clock = Clock::get()?;
+        let proof_len = btc_tx_proof.len() as u32;
+        record.btc_tx_proof = btc_tx_proof;
+        record.finalized_at = clock.unix_timestamp;
+        record.settle_status = SettleStatus::Settled;
+
+        emit!(SettleFinalized {
+            market: record.market,
+            match_record: record.key(),
+            match_id: record.match_id,
+            btc_tx_proof_len: proof_len,
+        });
+        Ok(())
+    }
+
+    /// Called by the keeper to abandon a stuck settlement (BTC tx didn't
+    /// confirm in N blocks, MPC timeout, etc.). Subsequent calls fail.
+    /// `reason_code` is keeper-defined (0 = unknown, 1 = btc_timeout,
+    /// 2 = mpc_failure, 3 = invalid_proof, 4 = refund_path).
+    pub fn fail_settlement(
+        ctx: Context<FinalizeSettlement>,
+        _match_id: u64,
+        reason_code: u16,
+    ) -> Result<()> {
+        let record = &mut ctx.accounts.match_record;
+        require!(
+            record.settle_status == SettleStatus::Pending,
+            ErrorCode::SettleNotPending,
+        );
+        let clock = Clock::get()?;
+        record.settle_status = SettleStatus::SettleFailed;
+        record.finalized_at = clock.unix_timestamp;
+
+        emit!(SettleFailedEvent {
+            market: record.market,
+            match_record: record.key(),
+            match_id: record.match_id,
+            reason_code,
         });
         Ok(())
     }
@@ -297,6 +358,23 @@ pub struct TryMatch<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(match_id: u64)]
+pub struct FinalizeSettlement<'info> {
+    #[account(
+        mut,
+        has_one = market,
+        constraint = match_record.match_id == match_id @ ErrorCode::InvalidMatchId,
+    )]
+    pub match_record: Account<'info, MatchRecord>,
+    /// CHECK: scoped via has_one on match_record above.
+    pub market: UncheckedAccount<'info>,
+    /// Anyone can finalize — settlement is permissionless. Production keeper
+    /// would use a dedicated keeper keypair; for the scaffold any signer is
+    /// accepted (gap I3 in docs/gaps.md).
+    pub keeper: Signer<'info>,
 }
 
 #[derive(Accounts)]
