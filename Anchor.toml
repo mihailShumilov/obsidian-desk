@@ -5,21 +5,36 @@ anchor_version = "0.32.1"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
-obsidian_core = "obsiDeskCoreProgram111111111111111111111111"
-
 [programs.devnet]
-obsidian_core = "obsiDeskCoreProgram111111111111111111111111"
+obsidian_core = "H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp"
+
+[programs.localnet]
+obsidian_core = "H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+# Tests run against the local validator anchor spawns below.
+# Override to devnet/mainnet via `--provider.cluster <url>`.
+cluster = "http://127.0.0.1:18899"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "pnpm exec mocha -t 1000000 tests/**/*.ts"
+# Mocha config lives in `.mocharc.cjs` at repo root (forces ts-node CJS
+# transpile so Node's native ESM .ts handler doesn't break CJS named imports).
+test = "pnpm exec mocha"
+
+[test]
+startup_wait = 5000
+shutdown_wait = 2000
+upgradeable = false
 
 [test.validator]
+# Non-standard port 18899 (default 8899) to avoid collision with other
+# local Solana validators / Docker projects on this machine.
+# Provider URL above must match.
+bind_address = "0.0.0.0"
 url = "https://api.devnet.solana.com"
+ledger = ".anchor/test-ledger"
+rpc_port = 18899

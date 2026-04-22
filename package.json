@@ -13,9 +13,22 @@
     "typecheck": "pnpm -r typecheck",
     "dev": "pnpm -F app -F keeper -r --parallel dev",
     "anchor:build": "anchor build",
-    "cargo:check": "cargo check --workspace"
+    "anchor:test": "anchor test",
+    "cargo:check": "cargo check --workspace",
+    "cargo:clippy": "cargo clippy --workspace --all-targets -- -D warnings"
   },
   "devDependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/web3.js": "^1.95.0",
+    "@types/bn.js": "^5.1.6",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.0",
+    "bn.js": "^5.2.1",
+    "chai": "^4.5.0",
+    "mocha": "^10.8.2",
+    "ts-mocha": "^11.1.0",
+    "ts-node": "^10.9.2",
     "typescript": "5.9.2"
   }
 }
