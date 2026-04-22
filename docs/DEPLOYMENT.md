@@ -154,7 +154,249 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 Then bump `IMAGE_TAG=$VERSION` in `.env.production` and `docker compose ... up -d`.
 
-## 6. Monitoring
+## 6. Single-VPS deploy with Cloudflare DNS
+
+Self-host everything on one Linux box: the compose stack from §5 plus a reverse proxy that Cloudflare routes traffic to. Good fit for demos, staging, or a cheap production box — no per-service platform accounts, one IP to firewall, one TLS cert to manage.
+
+### 6.1 Minimum requirements
+
+Mock-mode Encrypt/Ika keeps the footprint small; the app is a standalone Next.js 16 server and the keeper is a thin Node process.
+
+| Resource | Minimum | Recommended | Notes |
+|---|---|---|---|
+| vCPU | 1 | 2 | idles under 10 %; spikes during match bursts |
+| RAM | 1 GB | 2 GB | compose limits: app 512 MB, keeper 256 MB → leave ~1 GB for OS + reverse proxy |
+| Disk | 10 GB SSD | 20 GB | images ≈ 500 MB total; bulk is logs + IDL |
+| Arch | `x86_64` | `x86_64` | GHCR images are multi-arch (amd64 + arm64) — arm64 works, amd64 is the tested path |
+| OS | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS | Debian 12 also fine |
+| Network | 1 public IPv4, ports 22 / 80 / 443 | + IPv6 | outbound to Solana RPC + `mempool.space` |
+| Domain | Cloudflare-managed zone | — | nameservers on Cloudflare so DNS + proxy + cert tools line up |
+
+Providers that fit at this size (all ≤ $5 / mo): Hetzner CX22, DigitalOcean 1 GB droplet, OVH VPS Starter, Vultr Cloud Compute 1 GB.
+
+### 6.2 Provision and harden the host
+
+```bash
+# as root on a fresh Ubuntu 24.04 LTS VPS:
+apt update && apt upgrade -y
+apt install -y curl ca-certificates ufw fail2ban
+
+# deploy user
+adduser --gecos '' obsidian
+usermod -aG sudo obsidian
+install -d -m 700 -o obsidian -g obsidian /home/obsidian/.ssh
+cp ~/.ssh/authorized_keys /home/obsidian/.ssh/
+chown obsidian:obsidian /home/obsidian/.ssh/authorized_keys
+chmod 600 /home/obsidian/.ssh/authorized_keys
+
+# SSH: key-only, no root
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/'        /etc/ssh/sshd_config
+sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart ssh
+
+# firewall: only SSH + HTTP(S) on the public edge
+ufw allow OpenSSH
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw --force enable
+```
+
+The compose stack binds `13000` and `13001` but we will **not** open those in `ufw` — Caddy reverse-proxies to them over loopback.
+
+### 6.3 Install Docker Engine + compose plugin
+
+```bash
+# as root
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker obsidian
+docker compose version   # expect v2.x
+```
+
+### 6.4 Clone the repo and write `.env.production`
+
+```bash
+su - obsidian
+git clone https://github.com/<org>/encrypt-ika-obsidian-desk.git obsidian-desk
+cd obsidian-desk
+cp .env.example .env.production
+```
+
+Edit `.env.production`:
+
+```ini
+NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
+SOLANA_RPC=https://api.devnet.solana.com
+OBSIDIAN_PROGRAM_ID=H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
+NEXT_PUBLIC_NETWORK=devnet
+OBSIDIAN_ESPLORA_URL=https://mempool.space/signet/api
+IMAGE_TAG=v0.1.0
+KEEPER_KEYPAIR_PATH=/home/obsidian/secrets/keeper-keypair.json
+```
+
+For anything above a hackathon demo, swap the public `api.devnet.solana.com` for a Helius / Triton / QuickNode devnet endpoint — the public one is heavily rate-limited and will drop the wallet adapter under any real traffic.
+
+### 6.5 Provision keeper signer + IDL
+
+The keeper needs a funded Solana keypair and the Anchor IDL on disk (bind-mounted at `target/idl/obsidian_core.json`, see `docker-compose.yml`).
+
+```bash
+# keypair — generate on the VPS, never copy from a shared machine
+install -d -m 700 ~/secrets
+curl -sSfL https://release.anza.xyz/stable/install | sh
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+solana-keygen new --no-bip39-passphrase -o ~/secrets/keeper-keypair.json
+chmod 600 ~/secrets/keeper-keypair.json
+solana airdrop 2 --url devnet --keypair ~/secrets/keeper-keypair.json
+```
+
+From your workstation, after `anchor build`:
+
+```bash
+rsync -av target/idl/ obsidian@<vps-ip>:/home/obsidian/obsidian-desk/target/idl/
+```
+
+### 6.6 Start the stack
+
+```bash
+# on the VPS as obsidian
+cd ~/obsidian-desk
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.production pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.production up -d
+docker compose ps   # both services reach "healthy" within ~60 s
+```
+
+Smoke test from the VPS loopback before any public DNS flips:
+
+```bash
+curl -fsS http://127.0.0.1:13000/api/health
+curl -fsS http://127.0.0.1:13001/status | head -c 200
+```
+
+### 6.7 Reverse proxy with Caddy
+
+Caddy is the shortest path to TLS: one file, one directive per host, auto-issued Let's Encrypt certs.
+
+```bash
+# as root
+apt install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | \
+  gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | \
+  tee /etc/apt/sources.list.d/caddy-stable.list
+apt update && apt install -y caddy
+```
+
+`/etc/caddy/Caddyfile`:
+
+```caddyfile
+obsidiandesk.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:13000
+}
+
+# Optional — expose the keeper /status JSON on its own subdomain.
+# Leave commented-out if you want the keeper strictly internal.
+# keeper.obsidiandesk.example.com {
+#     reverse_proxy 127.0.0.1:13001
+# }
+```
+
+```bash
+systemctl reload caddy
+journalctl -u caddy -n 50 | grep -i 'certificate obtained'
+```
+
+### 6.8 Cloudflare DNS + SSL mode
+
+In the Cloudflare dashboard for `example.com`:
+
+1. **DNS → Records**
+   - `A` record: name `obsidiandesk`, IPv4 = VPS public IP, **Proxy status: Proxied** (orange cloud).
+   - `AAAA` record (if your VPS has IPv6): same name, same proxy setting.
+   - Repeat for any `keeper.obsidiandesk` subdomain you exposed in step 6.7.
+2. **SSL/TLS → Overview** → set mode to **Full (strict)**. Never ship `Flexible` — it terminates TLS at the edge and talks to your origin in plaintext.
+3. **SSL/TLS → Edge Certificates** → enable `Always Use HTTPS` and `Automatic HTTPS Rewrites`.
+4. **Caching → Cache Rules** → add a rule that bypasses cache for `/api/*` and any path containing `_next/data` — server-rendered content and the health endpoint must not be edge-cached.
+
+Optional lockdown — swap Let's Encrypt for a **Cloudflare Origin CA** cert if you want the VPS to reject any non-Cloudflare traffic:
+
+- Cloudflare → SSL/TLS → **Origin Server → Create Certificate** (15-year validity).
+- Save the PEM + key at `/etc/caddy/origin.pem` / `/etc/caddy/origin.key` (root-owned, `0600`).
+- Replace the Caddyfile site with:
+
+  ```caddyfile
+  obsidiandesk.example.com {
+      tls /etc/caddy/origin.pem /etc/caddy/origin.key
+      reverse_proxy 127.0.0.1:13000
+  }
+  ```
+
+- Optionally add an IP allowlist that rejects anything not in [Cloudflare's published IP range](https://www.cloudflare.com/ips/). Direct IP scanners now get a TLS handshake error instead of your app.
+
+### 6.9 Verify end-to-end
+
+```bash
+# DNS resolves through Cloudflare (expect CF edge IPs, not the VPS IP)
+dig +short obsidiandesk.example.com
+
+# TLS terminates cleanly, CF proxy stamps cf-ray
+curl -I https://obsidiandesk.example.com/api/health
+# expected: HTTP/2 200, cf-ray: <hex>-<airport-code>
+```
+
+Browser check: open `https://obsidiandesk.example.com`, connect a Phantom wallet on devnet, confirm the network chip reads `devnet`, the Depth card renders, the deposit wizard opens.
+
+### 6.10 Updates and rollback
+
+```bash
+# as obsidian@vps
+cd ~/obsidian-desk
+git fetch && git checkout v0.2.0
+sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=v0.2.0/' .env.production
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.production pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.production up -d
+```
+
+Rollback is the same commands with the previous `IMAGE_TAG`. Expect ~5 s of 502s during the app container swap; Caddy retries upstream, so most browsers never see it.
+
+### 6.11 Alternative — Cloudflare Tunnel (no open inbound ports)
+
+If you'd rather not expose the VPS IP at all, swap Caddy + the DNS `A` record for `cloudflared`:
+
+```bash
+# on the VPS
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+  -o cloudflared.deb
+sudo dpkg -i cloudflared.deb
+cloudflared tunnel login                          # browser auth
+cloudflared tunnel create obsidian-desk
+cloudflared tunnel route dns obsidian-desk obsidiandesk.example.com
+```
+
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <tunnel-uuid>
+credentials-file: /home/obsidian/.cloudflared/<tunnel-uuid>.json
+ingress:
+  - hostname: obsidiandesk.example.com
+    service: http://127.0.0.1:13000
+  - hostname: keeper.obsidiandesk.example.com
+    service: http://127.0.0.1:13001
+  - service: http_status:404
+```
+
+```bash
+sudo cloudflared service install   # systemd unit
+```
+
+With the tunnel you can tighten `ufw` further — no port 80 / 443 inbound, only `22/tcp` — and remove the DNS `A` record entirely. Cloudflare routes the hostname to the tunnel instead.
+
+## 7. Monitoring
 
 Today the keeper exposes a single `/status` JSON endpoint and a `[keeper:metrics]` stdout tick every 30 s. To wire that into a real monitoring stack:
 
@@ -178,7 +420,7 @@ Sample alerts to start with (PromQL once we expose Prometheus metrics):
 
 The keeper's `/status` already exposes `attempted/settled/failed/lastError`; converting those into Prometheus counters is a small `prom-client` integration.
 
-## 7. Incident playbooks
+## 8. Incident playbooks
 
 ### Keeper crashes in a loop
 
@@ -206,7 +448,7 @@ While we're in mock mode, this can't happen. Once we go to real backends:
 2. Verify `NEXT_PUBLIC_SOLANA_RPC` is reachable from the browser (NOT from the server). Browsers can't resolve docker network aliases like `solana-validator:8899`.
 3. Hard-refresh after changing env vars — they're inlined into the build.
 
-## 8. Security checklist
+## 9. Security checklist
 
 - [ ] Upgrade authority keypair lives in a hardware wallet or cold storage; never on the deploy machine
 - [ ] `OBSIDIAN_PROGRAM_ID` is the same in `Anchor.toml`, `lib.rs declare_id!()`, and every `.env*` file (CI verifies)
@@ -216,7 +458,7 @@ While we're in mock mode, this can't happen. Once we go to real backends:
 - [ ] `.dockerignore` excludes `.env*` (verified — `.env.example` is the only exception, and it has no secrets)
 - [ ] CSP headers set in `app/middleware.ts` to lock down inline scripts (TODO — open issue)
 
-## 9. Cost estimates
+## 10. Cost estimates
 
 For the hackathon-scale demo (1 prod instance per service, ≈ 50 unique visitors / day):
 
@@ -227,10 +469,12 @@ For the hackathon-scale demo (1 prod instance per service, ≈ 50 unique visitor
 | Solana devnet | Program rent + tx fees | n/a | <$5 in airdropped SOL |
 | mempool.space | Signet esplora | public, rate-limited | $0 |
 | GHCR | Image storage (≤ 5 GB) | free under 500 MB | $0 |
+| Single VPS (alt. to Vercel + Fly) | 1 vCPU / 2 GB (Hetzner, DO, OVH, Vultr) | basic | $4–6 |
+| Cloudflare | DNS + proxy + TLS for 1 zone | Free plan | $0 |
 
-Total: **~$2–5/mo** while we stay on devnet + signet. Mainnet adds Solana rent + real BTC for fees and is materially different — re-cost when crossing that line.
+Total: **~$2–5/mo** on the Vercel + Fly path, or **~$5–7/mo** on the single-VPS path (§6), while we stay on devnet + signet. Mainnet adds Solana rent + real BTC for fees and is materially different — re-cost when crossing that line.
 
-## 10. Where else to look
+## 11. Where else to look
 
 - [`README.md`](../README.md) — quick start + project overview
 - [`docs/DEVELOPMENT.md`](DEVELOPMENT.md) — daily-driver developer playbook
