@@ -1,0 +1,40 @@
+# Node
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+.next
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Anchor / Solana
+target/
+.anchor/
+test-ledger/
+
+# Env
+.env
+.env.local
+.env.*.local
+.env.production
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Generated keypairs (per-machine)
+*-keypair.json
+
+# Build artifacts copied out
+out/

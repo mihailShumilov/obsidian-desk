@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-desk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Institutional dark pool on Solana with FHE-matched orderbook (Encrypt) and native BTC settlement (Ika dWallets).",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "dev": "pnpm -F app -F keeper -r --parallel dev",
+    "anchor:build": "anchor build",
+    "cargo:check": "cargo check --workspace"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2"
+  }
+}
