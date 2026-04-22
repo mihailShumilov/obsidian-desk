@@ -91,7 +91,7 @@ Roadmap is driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md).
 - [x] **P5** — Next.js shell + obsidian design system (`fe50380`)
 - [x] **P6** — Landing wow hero: 3D cube + 6 sections (`99d62e3`)
 - [x] **P7** — Trade terminal: book + chart + submit choreography + match modal (`b13dca4`)
-- [ ] P8 — Order submission + dWallet onboarding polish
+- [x] **P8** — Deposit wizard polish: persisted state, esplora poll, header chip (`c990d30`)
 - [ ] P9 — Real Ika DKG + SPV proof + keeper hardening + demo script
 - [ ] P10 — Dockerization (full stack)
 - [ ] P11 — Final README + deployment guide
