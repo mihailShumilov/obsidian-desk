@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ObsidianLogo } from './logo';
 import { WalletButton } from './wallet-button';
+import { DWalletChip } from './dwallet-chip';
 
 const NAV = [
   { href: '/trade', label: 'Trade' },
@@ -38,6 +39,7 @@ export function Header(): JSX.Element {
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
+          <DWalletChip />
           <span className="hidden items-center gap-2 rounded-md border border-obsidian-700 px-2.5 py-1 text-xs uppercase tracking-widest text-muted sm:inline-flex">
             <span className="size-1.5 rounded-full bg-cipher-cyan-dim" />
             {NETWORK}

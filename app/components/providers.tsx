@@ -19,10 +19,10 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import {
   PhantomWalletAdapter,
   // Backpack has its own adapter package; we keep just Phantom for the
-  // P5 scaffold to avoid pulling in another dep. Backpack support lands in
-  // P8 alongside the trade-page wallet flow.
+  // scaffold to avoid pulling in another dep.
 } from '@solana/wallet-adapter-wallets';
 import '@solana/wallet-adapter-react-ui/styles.css';
+import { useDwalletPoller } from '@/stores/dwallet';
 
 const RPC_ENDPOINT =
   process.env['NEXT_PUBLIC_SOLANA_RPC'] ?? 'http://127.0.0.1:18899';
@@ -43,9 +43,18 @@ export function Providers({ children }: { children: ReactNode }): JSX.Element {
     <QueryClientProvider client={queryClient}>
       <ConnectionProvider endpoint={RPC_ENDPOINT}>
         <WalletProvider wallets={wallets} autoConnect={false}>
-          <WalletModalProvider>{children}</WalletModalProvider>
+          <WalletModalProvider>
+            <DwalletPollerHost />
+            {children}
+          </WalletModalProvider>
         </WalletProvider>
       </ConnectionProvider>
     </QueryClientProvider>
   );
+}
+
+/** Mounts the 15s esplora balance poll without re-rendering the tree. */
+function DwalletPollerHost(): null {
+  useDwalletPoller();
+  return null;
 }
