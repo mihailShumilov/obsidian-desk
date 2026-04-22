@@ -366,4 +366,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branching, commit conventions, and 
 
 ## License
 
-Proprietary — Copyright (c) 2026 Mihail Shumilov. All rights reserved. See [`LICENSE`](LICENSE). No use, copying, modification, or redistribution is permitted without prior written permission of the copyright holder.
+Proprietary — Copyright (c) 2026 Mykhailo Shumilov. All rights reserved. See [`LICENSE`](LICENSE). No use, copying, modification, or redistribution is permitted without prior written permission of the copyright holder.
