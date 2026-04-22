@@ -98,6 +98,41 @@ open http://127.0.0.1:13000/trade?admin=1   # + Match-all + Fast-forward
 
 > **Port scheme:** non-standard on purpose so the stack never collides with other local Docker projects. App `:13000`, keeper status `:13001`, Solana validator RPC `:18899`. Full mapping lands in `docker-compose.yml` with P10.
 
+## Run via Docker (P10)
+
+```bash
+# 0. (one-time) on apple silicon: install docker desktop + enable rosetta
+# 1. start a host validator (the in-container Agave panics under qemu on arm64)
+solana-test-validator --rpc-port 18899 --bind-address 127.0.0.1 --reset
+
+# 2. anchor build so target/idl/obsidian_core.json exists for the keeper mount
+anchor build && anchor deploy --provider.cluster http://127.0.0.1:18899
+
+# 3. one-shot bootstrap (generates a keeper keypair if missing, builds + ups the stack)
+./scripts/docker-bootstrap.sh
+
+# stack:
+#   app:           http://127.0.0.1:13000
+#   trade (admin): http://127.0.0.1:13000/trade?admin=1
+#   keeper status: http://127.0.0.1:13001/status
+#
+# linux/x86 only — also start the in-container validator:
+docker compose --profile local-rpc up -d
+```
+
+Production overlay (uses pulled GHCR images, no local validator):
+
+```bash
+cp .env.example .env.production
+# edit .env.production to point SOLANA_RPC at your devnet/mainnet endpoint
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.production up -d
+```
+
+**Image sizes:** `obsidian-app` ≈ 313 MB (Next.js standalone bundle, three.js dynamically loaded), `obsidian-keeper` ≈ 924 MB (`@coral-xyz/anchor` deps).
+
+**Why is the validator opt-in?** Anza only publishes Agave for `linux/amd64`, and current Agave 3.x panics under qemu emulation on arm64 (`io_uring NOT supported`). On M-series Macs run `solana-test-validator` on the host. On x86 Linux the validator container works (`--profile local-rpc`).
+
 ## Run the tests
 
 ```bash
@@ -151,8 +186,8 @@ Driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md).
 - [x] **P6** — Landing wow hero: 3D cube + 6 sections (`99d62e3`)
 - [x] **P7** — Trade terminal + match/settle modal (`b13dca4`)
 - [x] **P8** — Deposit wizard polish: persisted state + esplora poll (`c990d30`)
-- [x] **P9** — E2E + keeper metrics + admin mode + seed-demo (this commit)
-- [ ] P10 — Dockerization (full stack)
+- [x] **P9** — E2E + keeper metrics + admin mode + seed-demo (`c6a34bd`)
+- [x] **P10** — Dockerization: app + keeper images, dev compose, prod overlay (this commit)
 - [ ] P11 — Final README + deployment guide
 
 ## Known gaps

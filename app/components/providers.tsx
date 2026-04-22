@@ -16,11 +16,12 @@ import {
   WalletProvider,
 } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import {
-  PhantomWalletAdapter,
-  // Backpack has its own adapter package; we keep just Phantom for the
-  // scaffold to avoid pulling in another dep.
-} from '@solana/wallet-adapter-wallets';
+// Imported from the per-wallet package (not the umbrella
+// `@solana/wallet-adapter-wallets`) — the umbrella drags in Ledger
+// hardware wallet deps which need libusb / node-gyp / python at install
+// time, and doubles the production node_modules tree. We can add other
+// adapters one-by-one if needed.
+import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { useDwalletPoller } from '@/stores/dwallet';
 

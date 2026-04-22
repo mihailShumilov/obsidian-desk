@@ -1,0 +1,41 @@
+# Repo-root .dockerignore. Each Dockerfile sets its build context to the
+# repo root, so every service inherits these exclusions.
+
+# Node + Next + tsbuild outputs (re-built inside the image)
+**/node_modules
+**/.next
+**/dist
+**/tsconfig.tsbuildinfo
+
+# Rust + Anchor build outputs (huge; not needed by Node images)
+target
+.anchor
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Local + secrets
+.env
+.env.*
+!.env.example
+
+# Docs (the few that Dockerfiles need are explicitly COPY'd if at all)
+docs/vendor
+
+# Editor / OS junk
+.DS_Store
+.idea
+.vscode
+
+# Test artifacts + screenshots
+test-results
+coverage
+*.png
+*.jpg
+*.gif
+!app/public/**
+
+# CI logs
+*.log

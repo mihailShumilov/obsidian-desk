@@ -38,3 +38,4 @@ coverage/
 
 # Build artifacts copied out
 out/
+scripts/.keeper-keypair.json

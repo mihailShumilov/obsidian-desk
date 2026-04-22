@@ -1,0 +1,134 @@
+# ObsidianDesk — dev compose stack.
+#
+# `docker compose up` boots:
+#   - solana-validator (Agave) on host :18899 (RPC) + :18900 (WS)
+#   - app (Next.js) on host :13000
+#   - keeper (Node) on host :13001
+#
+# Per the project port convention (memory: feedback_docker_ports), every
+# host port is offset to the non-standard range so the stack never
+# collides with other local Docker projects.
+#
+# Notes:
+#   - Encrypt + Ika SDKs run in-process inside the keeper / app
+#     (OBSIDIAN_*_MODE=mock). No separate mock containers — the upstream
+#     vendor packages don't ship compiled .ts (gap E5/I0); a faithful
+#     standalone HTTP mock would require rewriting the SDK as a server.
+#   - signet BTC is fetched from mempool.space directly (the wizard's
+#     esplora poll). No btc-signet container needed for the demo.
+#   - The keeper currently expects target/idl/obsidian_core.json on disk.
+#     `anchor build` on the host populates ./target; we bind-mount it
+#     read-only so the keeper image doesn't depend on a separate
+#     program-build pipeline (deferred to P11).
+
+name: obsidian-desk
+
+services:
+  solana-validator:
+    # Opt-in via `docker compose --profile local-rpc up`. Reasoning:
+    # Anza ships only linux/amd64 images, and current Agave 3.x panics
+    # under qemu (`io_uring NOT supported`) — so on M-series Macs the
+    # in-container validator is unusable. Default UX assumes you run
+    # `solana-test-validator --rpc-port 18899 --bind-address 127.0.0.1`
+    # on the host. Linux/x86 users opt in with the profile.
+    profiles: ['local-rpc']
+    image: anzaxyz/agave:stable
+    platform: linux/amd64
+    container_name: obsidian-validator
+    command:
+      - solana-test-validator
+      - --rpc-port
+      - '8899'
+      - --rpc-bind-address
+      - 0.0.0.0
+      - --bind-address
+      - 0.0.0.0
+      - --no-rocksdb-compaction
+      - --reset
+    ports:
+      - '18899:8899'   # JSON-RPC
+      - '18900:8900'   # WebSocket
+    volumes:
+      - solana-ledger:/test-ledger
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS -o /dev/null -X POST -H 'content-type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getHealth\"}' http://127.0.0.1:8899"
+      interval: 5s
+      timeout: 3s
+      start_period: 20s
+      retries: 12
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: obsidian-app:dev
+    container_name: obsidian-app
+    environment:
+      # The browser hits the validator on the host port (browsers don't
+      # see the docker-network alias). Keep both vars for completeness:
+      # the public one is for the wallet adapter in the browser; the
+      # docker-internal one is for any future server-side RPC calls.
+      NEXT_PUBLIC_SOLANA_RPC: http://127.0.0.1:18899
+      SOLANA_RPC: http://solana-validator:8899
+      NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID: H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
+      NEXT_PUBLIC_NETWORK: devnet
+      OBSIDIAN_ESPLORA_URL: https://mempool.space/signet/api
+      OBSIDIAN_ENCRYPT_MODE: mock
+      OBSIDIAN_IKA_MODE: mock
+    ports:
+      - '13000:3000'
+    # `solana-validator` runs under the `local-rpc` profile (opt-in) —
+    # don't make app a hard depend, otherwise `docker compose up`
+    # without the profile blocks forever waiting for it. Users who do
+    # `--profile local-rpc up` get the validator + the dependency
+    # ordering benefit; everyone else points at a host-side validator.
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health']
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  keeper:
+    build:
+      context: .
+      dockerfile: keeper/Dockerfile
+    image: obsidian-keeper:dev
+    container_name: obsidian-keeper
+    environment:
+      ANCHOR_PROVIDER_URL: http://solana-validator:8899
+      ANCHOR_WALLET: /run/secrets/keeper_keypair.json
+      OBSIDIAN_PROGRAM_ID: H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
+      OBSIDIAN_IKA_MODE: mock
+      KEEPER_POLL_MS: '3000'
+      KEEPER_PORT: '3001'
+      KEEPER_FEERATE: '4'
+    ports:
+      - '13001:3001'
+    # See app: validator dependency is opt-in via the `local-rpc` profile.
+    restart: unless-stopped
+    secrets:
+      - keeper_keypair.json
+    volumes:
+      # Anchor IDL produced by `anchor build` on the host. Read-only.
+      # Path matches the keeper's `process.cwd()` (= /app inside the
+      # deployed bundle) + the `loadIdl()` lookup at target/idl/...
+      - ./target/idl:/app/target/idl:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3001/status']
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+secrets:
+  keeper_keypair.json:
+    # The host file the keeper signs with. Defaults to the user's
+    # standard solana keypair; override per environment.
+    file: ${KEEPER_KEYPAIR_PATH:-./scripts/.keeper-keypair.json}
+
+volumes:
+  solana-ledger:

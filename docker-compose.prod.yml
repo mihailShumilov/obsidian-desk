@@ -1,0 +1,59 @@
+# ObsidianDesk — production overlay.
+#
+# Layered on top of docker-compose.yml; drops the local validator entirely
+# (use a real Solana RPC) and removes the dev-only image rebuild config:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Required environment (host or .env.production):
+#   SOLANA_RPC                           https://api.devnet.solana.com (or your node)
+#   NEXT_PUBLIC_SOLANA_RPC               same URL the browser should hit
+#   OBSIDIAN_PROGRAM_ID                  pinned program id
+#   KEEPER_KEYPAIR_PATH                  absolute path to the keeper signer keypair
+
+name: obsidian-desk
+
+services:
+  # Disable the dev-only validator in prod: depend on an external RPC.
+  solana-validator:
+    profiles: ['disabled']
+
+  app:
+    image: ghcr.io/mihailshumilov/obsidian-app:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+    environment:
+      NEXT_PUBLIC_SOLANA_RPC: ${NEXT_PUBLIC_SOLANA_RPC:?set NEXT_PUBLIC_SOLANA_RPC}
+      SOLANA_RPC: ${SOLANA_RPC:?set SOLANA_RPC}
+      NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID: ${OBSIDIAN_PROGRAM_ID:?set OBSIDIAN_PROGRAM_ID}
+      NEXT_PUBLIC_NETWORK: ${NEXT_PUBLIC_NETWORK:-devnet}
+      OBSIDIAN_ESPLORA_URL: ${OBSIDIAN_ESPLORA_URL:-https://mempool.space/signet/api}
+      OBSIDIAN_ENCRYPT_MODE: mock
+      OBSIDIAN_IKA_MODE: mock
+    depends_on: !reset []
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    restart: always
+
+  keeper:
+    image: ghcr.io/mihailshumilov/obsidian-keeper:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+    environment:
+      ANCHOR_PROVIDER_URL: ${SOLANA_RPC:?set SOLANA_RPC}
+      ANCHOR_WALLET: /run/secrets/keeper_keypair.json
+      OBSIDIAN_PROGRAM_ID: ${OBSIDIAN_PROGRAM_ID:?set OBSIDIAN_PROGRAM_ID}
+      OBSIDIAN_IKA_MODE: mock
+      KEEPER_POLL_MS: ${KEEPER_POLL_MS:-3000}
+      KEEPER_PORT: '3001'
+      KEEPER_FEERATE: ${KEEPER_FEERATE:-4}
+    depends_on: !reset []
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+    restart: always
