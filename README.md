@@ -89,7 +89,7 @@ Roadmap is driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md).
 - [x] **P3** — Encrypt SDK integration (client-side encryption, mock mode) (`427d1e5`)
 - [x] **P4** — Ika dWallet integration + BTC tx builder + keeper + e2e settlement (`6d9ce5c`)
 - [x] **P5** — Next.js shell + obsidian design system (`fe50380`)
-- [ ] P6 — Landing page wow hero (3D cube + scroll-triggered solution diagram)
+- [x] **P6** — Landing wow hero: 3D cube + 6 sections (`99d62e3`)
 - [ ] P7 — Trade page (encrypted orderbook UI + submit choreography + match modal)
 - [ ] P8 — Order submission + dWallet onboarding polish
 - [ ] P9 — Real Ika DKG + SPV proof + keeper hardening + demo script
