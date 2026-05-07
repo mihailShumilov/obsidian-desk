@@ -16,6 +16,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useConnection } from '@solana/wallet-adapter-react';
+import { DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
 
 interface Stats {
   matchesSettled: number | null;
@@ -23,8 +24,7 @@ interface Stats {
 }
 
 const PROGRAM_ID =
-  process.env['NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID'] ??
-  'H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp';
+  process.env['NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID'] ?? DEFAULT_OBSIDIAN_PROGRAM_ID;
 
 export function StatsStrip(): JSX.Element {
   const { connection } = useConnection();

@@ -117,7 +117,7 @@ export default function KitchenSink(): JSX.Element {
           />
           <DWalletCard
             chain="solana"
-            address="H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp"
+            address="kitchen-sink-mock-address"
           />
         </div>
       </Section>

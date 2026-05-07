@@ -13,13 +13,14 @@ import { address as btcAddress } from 'bitcoinjs-lib';
 import { buildSpendTx, networkFor } from '../src/btc.ts';
 import { VendorSDKUnavailableError } from '../src/errors.ts';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../src/slots.ts';
+import { DEFAULT_OBSIDIAN_PROGRAM_ID } from '../src/program-id.ts';
 
 function realScriptFor(addr: string): string {
   // bitcoinjs-lib v7 returns Uint8Array; wrap in Buffer for hex serialization.
   return Buffer.from(btcAddress.toOutputScript(addr, networkFor('signet'))).toString('hex');
 }
 
-const PROGRAM_ID = 'H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp';
+const PROGRAM_ID = DEFAULT_OBSIDIAN_PROGRAM_ID;
 
 describe('ika (mock mode)', () => {
   before(() => {

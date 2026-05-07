@@ -32,7 +32,7 @@ import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { SpendInput } from '@obsidian-desk/sdk';
-import { btc as btcSdk } from '@obsidian-desk/sdk';
+import { btc as btcSdk, DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
 import { pollOnce, type PollReport } from './poll.ts';
 import { createHash } from 'node:crypto';
 
@@ -43,7 +43,7 @@ const RPC = process.env['ANCHOR_PROVIDER_URL'] ?? 'http://127.0.0.1:18899';
 const WALLET_PATH =
   process.env['ANCHOR_WALLET'] ?? join(homedir(), '.config', 'solana', 'id.json');
 const PROGRAM_ID_STR =
-  process.env['OBSIDIAN_PROGRAM_ID'] ?? 'H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp';
+  process.env['OBSIDIAN_PROGRAM_ID'] ?? DEFAULT_OBSIDIAN_PROGRAM_ID;
 
 interface MetricsSnapshot {
   bootedAt: string;

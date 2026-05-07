@@ -13,11 +13,14 @@
  * with `OBSIDIAN_ESPLORA_URL` (defaults to mempool.space's signet API).
  */
 
-import { ika, DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
+import {
+  ika,
+  DEFAULT_ORDER_EXPIRY_SLOTS,
+  DEFAULT_OBSIDIAN_PROGRAM_ID,
+} from '@obsidian-desk/sdk';
 
 const PROGRAM_ID =
-  process.env['NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID'] ??
-  'H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp';
+  process.env['NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID'] ?? DEFAULT_OBSIDIAN_PROGRAM_ID;
 
 const ESPLORA_URL =
   process.env['OBSIDIAN_ESPLORA_URL'] ??
