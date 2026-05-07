@@ -112,10 +112,3 @@ export function useDwalletPoller(): void {
   }, [dwallet, setBalance]);
 }
 
-export function formatBtc(sats: bigint): string {
-  if (sats === 0n) return '0';
-  const whole = sats / 100_000_000n;
-  const frac = sats % 100_000_000n;
-  const fracStr = frac.toString().padStart(8, '0').replace(/0+$/, '');
-  return fracStr.length > 0 ? `${whole}.${fracStr}` : `${whole}`;
-}

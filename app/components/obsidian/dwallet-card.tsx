@@ -8,6 +8,7 @@
 import { ChainBadge, type Chain } from './chain-badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { formatBtc, truncateAddress } from '@/lib/format';
 
 export interface DWalletCardProps {
   chain: Chain;
@@ -15,19 +16,6 @@ export interface DWalletCardProps {
   /** Balance in the chain's smallest unit (sats for BTC). Optional. */
   balanceSats?: bigint;
   className?: string;
-}
-
-function truncateAddress(addr: string): string {
-  if (addr.length <= 12) return addr;
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
-
-function formatBtc(sats: bigint): string {
-  // Render up to 8 decimals, drop trailing zeros for compactness
-  const whole = sats / 100_000_000n;
-  const frac = sats % 100_000_000n;
-  const fracStr = frac.toString().padStart(8, '0').replace(/0+$/, '');
-  return fracStr.length > 0 ? `${whole}.${fracStr}` : `${whole}`;
 }
 
 export function DWalletCard({

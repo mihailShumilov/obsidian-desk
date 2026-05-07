@@ -21,18 +21,14 @@ import { ProgressRail } from '@/components/deposit/progress-rail';
 import { StepShell } from '@/components/deposit/step-shell';
 import { KeyShards } from '@/components/deposit/key-shards';
 import { CopyButton } from '@/components/deposit/copy-button';
-import { useDwalletStore, formatBtc } from '@/stores/dwallet';
+import { useDwalletStore } from '@/stores/dwallet';
+import { formatBtc, truncateAddress } from '@/lib/format';
 import {
   createDWalletAction,
   lockPolicyAction,
 } from './actions';
 
 const FAUCET_URL = 'https://signet.bc-2.jp/';
-
-function truncate(addr: string): string {
-  if (addr.length <= 12) return addr;
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
 
 export function DepositWizard(): JSX.Element {
   const dwallet = useDwalletStore((s) => s.dwallet);
@@ -137,7 +133,7 @@ function CreateStep({
       index={1}
       title="Create dWallet"
       state={state}
-      summary={dwalletAddress ? truncate(dwalletAddress) : undefined}
+      summary={dwalletAddress ? truncateAddress(dwalletAddress) : undefined}
     >
       <div className="grid gap-6 md:grid-cols-[1fr_auto]">
         <div>
@@ -361,7 +357,7 @@ function DoneState({
         <div className="flex items-center justify-between gap-3 text-sm">
           <ChainBadge chain="bitcoin" label="dWallet · Signet" />
           <span className="font-mono text-xs text-muted" title={dwallet.address}>
-            {truncate(dwallet.address)}
+            {truncateAddress(dwallet.address)}
           </span>
         </div>
         <div className="flex items-baseline justify-between text-xs">
@@ -374,7 +370,7 @@ function DoneState({
           <div className="flex items-baseline justify-between text-xs">
             <span className="text-muted">Policy account</span>
             <span className="font-mono text-foreground" title={policyAccount}>
-              {truncate(policyAccount)}
+              {truncateAddress(policyAccount)}
             </span>
           </div>
         )}

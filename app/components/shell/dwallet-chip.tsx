@@ -7,11 +7,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useDwalletStore, formatBtc } from '@/stores/dwallet';
-
-function truncate(addr: string): string {
-  return addr.length <= 12 ? addr : `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
+import { useDwalletStore } from '@/stores/dwallet';
+import { formatBtc, truncateAddress } from '@/lib/format';
 
 export function DWalletChip(): JSX.Element | null {
   const dwallet = useDwalletStore((s) => s.dwallet);
@@ -34,7 +31,7 @@ export function DWalletChip(): JSX.Element | null {
         }`}
         aria-hidden="true"
       />
-      <span className="font-mono text-muted">{truncate(dwallet.address)}</span>
+      <span className="font-mono text-muted">{truncateAddress(dwallet.address)}</span>
       <span className="font-mono text-foreground">
         {formatBtc(BigInt(balanceSats))}
         <span className="ml-1 text-muted">BTC</span>
