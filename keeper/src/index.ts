@@ -26,7 +26,7 @@ import {
   Wallet,
   type Idl,
 } from '@coral-xyz/anchor';
-import { Connection, Keypair, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import type { SpendInput } from '@obsidian-desk/sdk';
 import { btc as btcSdk, DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
 import { pollOnce, type PollReport } from './poll.ts';
+import { loadKeypair } from './anchor-shims.ts';
 import { createHash } from 'node:crypto';
 
 const POLL_MS = Number(process.env['KEEPER_POLL_MS'] ?? 3_000);
@@ -53,11 +54,6 @@ interface MetricsSnapshot {
   failed: number;
   lastTickAt: string | null;
   lastError: string | null;
-}
-
-function loadKeypair(path: string): Keypair {
-  const raw = JSON.parse(readFileSync(path, 'utf8')) as number[];
-  return Keypair.fromSecretKey(Uint8Array.from(raw));
 }
 
 function loadIdl(): Idl {

@@ -32,14 +32,17 @@
  */
 
 import * as anchor from '@coral-xyz/anchor';
-import { Keypair, PublicKey } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 import BN from 'bn.js';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { encryptOrder } from '../sdk/src/encrypt.ts';
 import * as ikaSdk from '../sdk/src/ika.ts';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../sdk/src/slots.ts';
+import {
+  loadKeypair,
+  type LooseProgramMethods,
+} from '../keeper/src/anchor-shims.ts';
 
 interface SeedOrder {
   side: 'bid' | 'ask';
@@ -60,11 +63,6 @@ const SEED_ORDERS: SeedOrder[] = [
   { side: 'ask', priceUsdc6: 70_400_000_000n, sizeSats: 12_500_000n },
   { side: 'ask', priceUsdc6: 70_800_000_000n, sizeSats: 75_000_000n },
 ];
-
-function loadKeypair(path: string): Keypair {
-  const raw = JSON.parse(readFileSync(path, 'utf8')) as number[];
-  return Keypair.fromSecretKey(Uint8Array.from(raw));
-}
 
 async function main(): Promise<void> {
   process.env['OBSIDIAN_ENCRYPT_MODE'] = 'mock';
@@ -119,14 +117,7 @@ async function main(): Promise<void> {
   }
 
   if (!marketExisted) {
-    const methods = program.methods as Record<
-      string,
-      (...args: unknown[]) => {
-        accountsPartial(a: Record<string, PublicKey>): {
-          rpc(opts?: Record<string, unknown>): Promise<string>;
-        };
-      }
-    >;
+    const methods = program.methods as LooseProgramMethods;
     const sig = await methods['initializeMarket']!(baseMint, quoteMint)
       .accountsPartial({
         market,
@@ -178,14 +169,7 @@ async function main(): Promise<void> {
     const dwPk = i % 2 === 0 ? aliceDwPk : bobDwPk;
 
     try {
-      const methods = program.methods as Record<
-        string,
-        (...args: unknown[]) => {
-          accountsPartial(a: Record<string, PublicKey>): {
-            rpc(opts?: Record<string, unknown>): Promise<string>;
-          };
-        }
-      >;
+      const methods = program.methods as LooseProgramMethods;
       await methods['submitOrder']!(
         Buffer.from(blob.side_ct),
         Buffer.from(blob.price_ct),

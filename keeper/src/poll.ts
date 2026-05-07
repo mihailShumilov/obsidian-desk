@@ -10,6 +10,7 @@ import BN from 'bn.js';
 import type { Program } from '@coral-xyz/anchor';
 import type { PublicKey } from '@solana/web3.js';
 import { btc as btcSdkDefault, type SpendInput } from '@obsidian-desk/sdk';
+import type { LooseProgramMethods } from './anchor-shims.ts';
 
 // SDK namespaces are passed in via PollOptions so callers can inject the
 // SAME module instance they used to set up dWallets. Default to the package
@@ -169,14 +170,7 @@ export async function pollOnce(
       // Finalize on Solana. Proof blob = raw signed BTC tx hex bytes; P9
       // will replace this with an SPV proof once the keeper polls signet.
       const proofBytes = Buffer.from(signedTxHex, 'hex');
-      const methods = program.methods as Record<
-        string,
-        (...args: unknown[]) => {
-          accountsPartial(a: Record<string, PublicKey>): {
-            rpc(opts?: Record<string, unknown>): Promise<string>;
-          };
-        }
-      >;
+      const methods = program.methods as LooseProgramMethods;
       await methods['finalizeSettlement']!(new BN(matchIdStr), proofBytes)
         .accountsPartial({
           matchRecord: publicKey,
@@ -199,14 +193,7 @@ export async function pollOnce(
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[keeper ${keeperId}] match ${matchIdStr} failed: ${reason}`);
       try {
-        const methods = program.methods as Record<
-          string,
-          (...args: unknown[]) => {
-            accountsPartial(a: Record<string, PublicKey>): {
-              rpc(opts?: Record<string, unknown>): Promise<string>;
-            };
-          }
-        >;
+        const methods = program.methods as LooseProgramMethods;
         await methods['failSettlement']!(new BN(matchIdStr), 0)
           .accountsPartial({
             matchRecord: publicKey,
