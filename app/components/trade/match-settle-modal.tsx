@@ -35,8 +35,23 @@ const SETTLE_STEPS_BTC = ['signing', 'signed (1/T)', 'broadcast', '1 conf'];
 
 // Stage durations (ms): [beacon, reveal, settle, sealed].
 // Default: per UI_DESIGN.md §5.3. Fast: ~10× compressed for demos.
-const TIMING_DEFAULT = [800, 1200, 4000, 500] as const;
-const TIMING_FAST = [300, 400, 600, 200] as const;
+export const TIMING_DEFAULT = [800, 1200, 4000, 500] as const;
+export const TIMING_FAST = [300, 400, 600, 200] as const;
+
+/**
+ * Returns offsets, in ms, when YourOrders should flip to "settling" and
+ * "settled" so badges stay in lockstep with the modal animation. Sums
+ * the same stage tuple the modal uses internally — single source of truth.
+ */
+export function settleStatusOffsets(fast: boolean): {
+  settlingAt: number;
+  settledAt: number;
+} {
+  const t = fast ? TIMING_FAST : TIMING_DEFAULT;
+  const settlingAt = t[0] + t[1];
+  const settledAt = settlingAt + t[2];
+  return { settlingAt, settledAt };
+}
 
 export function MatchSettleModal({
   match,

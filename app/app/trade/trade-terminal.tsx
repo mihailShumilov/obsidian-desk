@@ -25,6 +25,7 @@ import { OrderForm, type OrderFormSubmit } from '@/components/trade/order-form';
 import { YourOrders } from '@/components/trade/your-orders';
 import {
   MatchSettleModal,
+  settleStatusOffsets,
   type MatchInfo,
 } from '@/components/trade/match-settle-modal';
 import {
@@ -124,11 +125,9 @@ export function TradeTerminal(): JSX.Element {
     };
     setMatch(info);
 
-    // Track per-modal-stage timing so YourOrders stays in sync.
-    const settleAt = (fastSettle ? 300 : 800) + (fastSettle ? 400 : 1200);
-    const sealedAt = settleAt + (fastSettle ? 600 : 4000);
-    setTimeout(() => setStatus(target.id, 'settling'), settleAt);
-    setTimeout(() => setStatus(target.id, 'settled'), sealedAt);
+    const { settlingAt, settledAt } = settleStatusOffsets(fastSettle);
+    setTimeout(() => setStatus(target.id, 'settling'), settlingAt);
+    setTimeout(() => setStatus(target.id, 'settled'), settledAt);
   }
 
   function handleTryMatch(): void {
