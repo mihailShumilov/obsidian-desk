@@ -574,14 +574,21 @@ pub struct TryMatch<'info> {
     pub b_size_ct: UncheckedAccount<'info>,
 
     // ── Output ciphertext accounts (fresh keypair accounts the Encrypt
-    //     program initialises during execute_graph). ──
-    /// CHECK: keeper-allocated output ciphertext for can_match (EBool).
+    //     program initialises during execute_graph). They MUST be passed
+    //     with isSigner=true at the meta level (the keeper's matching loop
+    //     constructs the Instruction by hand to set this) because the
+    //     downstream system_program::create_account inside execute_graph
+    //     requires the new account's keypair to authorise itself.
+    //     We declare as `UncheckedAccount` so the program-side validator
+    //     doesn't block when we eventually re-issue the ix from a strictly-
+    //     typed client. ──
+    /// CHECK: Encrypt-allocated output ciphertext for can_match (EBool).
     #[account(mut)]
     pub can_match_out: UncheckedAccount<'info>,
-    /// CHECK: keeper-allocated output ciphertext for fill_size (EUint64).
+    /// CHECK: Encrypt-allocated output ciphertext for fill_size (EUint64).
     #[account(mut)]
     pub fill_size_out: UncheckedAccount<'info>,
-    /// CHECK: keeper-allocated output ciphertext for clearing_price (EUint64).
+    /// CHECK: Encrypt-allocated output ciphertext for clearing_price (EUint64).
     #[account(mut)]
     pub clearing_price_out: UncheckedAccount<'info>,
 

@@ -31,6 +31,58 @@ gRPC `createInput` and returns 3 fresh on-chain ciphertext-account
 identifiers; `submit_order` accepts those refs directly. `MatchIntent` also
 holds the 3 keeper-supplied output ct refs from `try_match`.
 
+### E2-residual. execute_graph CPI fails at runtime for 6-input/3-output graphs — **UPSTREAM BLOCKER**
+
+**Where:** `keeper/src/matching.ts::runMatchCycle` — the on-chain
+`try_match` instruction reaches Encrypt's `execute_graph` CPI but it
+fails at depth 2 with `Cross-program invocation with unauthorized signer
+or writable account`.
+
+**State (2026-05-07, devnet smoke):**
+- obsidian-core `1.0.2` deployed to Solana devnet at
+  `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`.
+- `tsx keeper/scripts/devnet-bootstrap.ts` cleanly creates a market and
+  two opposite-side orders whose `*_ct` fields point at real Encrypt
+  Ciphertext accounts on devnet (created via gRPC `createInput`).
+- `tsx keeper/scripts/match-pair.ts <market> <a> <b>` reaches the Encrypt
+  CPI inside `try_match` and fails on every account-shape variant we've
+  tried.
+
+**Tried, all fail:**
+1. Output cts as fresh keypair signers (CREATE mode). Fails at depth 3
+   with `<output_pubkey> writable privilege escalated` — Encrypt's inner
+   CPI to system_program needs them as signers but encrypt-anchor's
+   `invoke_execute_graph` demoted them to `isSigner=false` at depth 2.
+2. Output cts pre-allocated via gRPC `createInput` (UPDATE mode). Fails
+   at depth 3 with `<output_pubkey> signer privilege escalated` — the
+   same demotion applies, but now the output is already authorised, so
+   the failure surfaces at a different inner CPI step.
+
+**Root cause:** the encrypt-anchor v0.1.0 `invoke_execute_graph` hard-codes
+`AccountMeta::new(acct.key(), false)` for every `encrypt_execute_account`,
+demoting any `isSigner=true` flag from the outer transaction. This works
+for the upstream voting example (`cast_vote_graph(yes, no, vote) → (yes, no)`)
+because all output cts overlap with input cts and exist before the call,
+but it doesn't fit our `match_orders_graph` shape with 3 fresh outputs
+that don't appear in the input list.
+
+**Closure paths:**
+1. Wait for upstream `encrypt-anchor` to ship a CPI variant that
+   propagates the outer-tx signer flag to outputs (or pre-allocates them
+   on the keeper's behalf via a different ix).
+2. Vendor + adapt `encrypt-anchor::invoke_execute_graph` so we can
+   choose the meta layout (preserving `isSigner=true` on selected
+   `encrypt_execute_accounts`).
+3. Fold our match_orders into a strict UPDATE-mode shape — overwrite 3
+   of the 6 input order cts in place. This destroys the original orders,
+   so it's only viable if `MatchIntent` carries pristine copies, which
+   doubles the per-match account count.
+
+The on-chain DSL graph + program-side wiring are otherwise complete; the
+keeper matching loop builds the 22-account instruction correctly and
+gets all the way to the Encrypt CPI before stopping at the signer
+demotion.
+
 ### E2. ~~`enc_xor / enc_gte / enc_min` primitives don't exist~~ — **CLOSED**
 **State (2026-05-07):** ObsidianDesk migrated to Anchor 1.0.2 (Rust 1.94)
 and pulled in `encrypt-anchor` + `encrypt-solana-dsl` from

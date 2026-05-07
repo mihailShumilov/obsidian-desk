@@ -26,10 +26,13 @@ import {
   Keypair,
   PublicKey,
   SystemProgram,
+  Transaction,
   TransactionInstruction,
+  sendAndConfirmTransaction,
   type Signer,
 } from '@solana/web3.js';
 import { encrypt as encryptSdk } from '@obsidian-desk/sdk';
+import { createHash } from 'node:crypto';
 import {
   ENCRYPT_PROGRAM_ID,
   IX_CREATE_DEPOSIT,
@@ -126,73 +129,100 @@ export async function runMatchCycle(
     payer.publicKey,
   );
 
-  // Fresh keypair accounts for the three FHE comparator outputs. They land
-  // on chain as Encrypt Ciphertext accounts when the executor commits.
-  const canMatchKp = Keypair.generate();
-  const fillSizeKp = Keypair.generate();
-  const clearingPriceKp = Keypair.generate();
+  // The encrypt-anchor v0.1.0 execute_graph CPI expects output ct accounts
+  // to PRE-EXIST (UPDATE mode) — it doesn't create new keypair accounts
+  // mid-CPI. We pre-create the three outputs via gRPC `createInput` with
+  // zero placeholder plaintexts; execute_graph will overwrite them with
+  // the real comparator results.
+  console.log(
+    `[keeper ${options.keeperId}] pre-allocating 3 output ct accounts via gRPC…`,
+  );
+  // EBool placeholder (false), then two EUint64 zeros.
+  const canMatchInitId = await encryptSdk.encryptSide('bid');
+  const fillSizeInitId = await encryptSdk.encryptU64(0n);
+  const clearingInitId = await encryptSdk.encryptU64(0n);
+  const canMatchPubkey = new PublicKey(canMatchInitId);
+  const fillSizePubkey = new PublicKey(fillSizeInitId);
+  const clearingPricePubkey = new PublicKey(clearingInitId);
 
   console.log(
     `[keeper ${options.keeperId}] try_match #${matchId} ` +
       `a=${pair.orderA.toBase58().slice(0, 8)} b=${pair.orderB
         .toBase58()
         .slice(0, 8)} → ct outputs: ${[
-        canMatchKp.publicKey.toBase58().slice(0, 8),
-        fillSizeKp.publicKey.toBase58().slice(0, 8),
-        clearingPriceKp.publicKey.toBase58().slice(0, 8),
+        canMatchPubkey.toBase58().slice(0, 8),
+        fillSizePubkey.toBase58().slice(0, 8),
+        clearingPricePubkey.toBase58().slice(0, 8),
       ].join(', ')}`,
   );
 
-  const methods = program.methods as LooseProgramMethods;
-
-  // ── 1. try_match (CPI to execute_graph) ─────────────────────────────────
-  const tryMatchTx = await methods['tryMatch']!(
+  // Build the try_match instruction by hand. Anchor 0.32 JS encodes the
+  // accounts struct with `isSigner = false` for our 3 output cts (they're
+  // declared as `UncheckedAccount` on the deployed program), but the
+  // CPI to execute_graph downstream requires the new ct accounts to be
+  // signers. We therefore construct the meta directly with `isSigner=true`
+  // for them and partial-sign with the fresh keypairs.
+  const ixData = encodeTryMatchData(
     new BN(matchId.toString()),
     pdas.cpiAuthorityBump,
-  )
-    .accountsPartial({
-      market,
-      orderA: pair.orderA,
-      orderB: pair.orderB,
-      matchIntent,
-      aSideCt: pubkeyFromOrderField(orderA.sideCt),
-      aPriceCt: pubkeyFromOrderField(orderA.priceCt),
-      aSizeCt: pubkeyFromOrderField(orderA.sizeCt),
-      bSideCt: pubkeyFromOrderField(orderB.sideCt),
-      bPriceCt: pubkeyFromOrderField(orderB.priceCt),
-      bSizeCt: pubkeyFromOrderField(orderB.sizeCt),
-      canMatchOut: canMatchKp.publicKey,
-      fillSizeOut: fillSizeKp.publicKey,
-      clearingPriceOut: clearingPriceKp.publicKey,
-      encryptProgram: pdas.encryptProgram,
-      encryptConfig: pdas.config,
-      encryptDeposit: pdas.deposit,
-      encryptCpiAuthority: pdas.cpiAuthority,
-      callerProgram,
-      encryptNetworkKey: pdas.networkKey,
-      encryptEventAuthority: pdas.eventAuthority,
-      keeperAuthority: keeperAuthority.publicKey,
-      payer: payer.publicKey,
-      systemProgram: SystemProgram.programId,
-    })
-    .signers([keeperAuthority, payer, canMatchKp, fillSizeKp, clearingPriceKp])
-    .rpc({ commitment: 'confirmed' });
+  );
+  const ix = new TransactionInstruction({
+    programId: callerProgram,
+    data: ixData,
+    keys: [
+      { pubkey: market, isSigner: false, isWritable: true },
+      { pubkey: pair.orderA, isSigner: false, isWritable: false },
+      { pubkey: pair.orderB, isSigner: false, isWritable: false },
+      { pubkey: matchIntent, isSigner: false, isWritable: true },
+      // Input cts must be writable — Encrypt's execute_graph CPI requires
+      // it (matches the upstream voting example's cast_vote keys).
+      { pubkey: pubkeyFromOrderField(orderA.sideCt), isSigner: false, isWritable: true },
+      { pubkey: pubkeyFromOrderField(orderA.priceCt), isSigner: false, isWritable: true },
+      { pubkey: pubkeyFromOrderField(orderA.sizeCt), isSigner: false, isWritable: true },
+      { pubkey: pubkeyFromOrderField(orderB.sideCt), isSigner: false, isWritable: true },
+      { pubkey: pubkeyFromOrderField(orderB.priceCt), isSigner: false, isWritable: true },
+      { pubkey: pubkeyFromOrderField(orderB.sizeCt), isSigner: false, isWritable: true },
+      // Output cts — pre-existing accounts (gRPC createInput'd above) the
+      // execute_graph CPI overwrites in place. NOT signers — they already
+      // exist so no system_program create_account is needed downstream.
+      { pubkey: canMatchPubkey, isSigner: false, isWritable: true },
+      { pubkey: fillSizePubkey, isSigner: false, isWritable: true },
+      { pubkey: clearingPricePubkey, isSigner: false, isWritable: true },
+      { pubkey: pdas.encryptProgram, isSigner: false, isWritable: false },
+      { pubkey: pdas.config, isSigner: false, isWritable: true },
+      { pubkey: pdas.deposit, isSigner: false, isWritable: true },
+      { pubkey: pdas.cpiAuthority, isSigner: false, isWritable: false },
+      { pubkey: callerProgram, isSigner: false, isWritable: false },
+      { pubkey: pdas.networkKey, isSigner: false, isWritable: false },
+      { pubkey: pdas.eventAuthority, isSigner: false, isWritable: false },
+      { pubkey: keeperAuthority.publicKey, isSigner: true, isWritable: false },
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+  });
+  const tryMatchTx = await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(ix),
+    dedupeSigners([keeperAuthority, payer]),
+    { commitment: 'confirmed' },
+  );
 
   console.log(`[keeper ${options.keeperId}] try_match #${matchId} tx=${tryMatchTx.slice(0, 12)}…`);
 
   // ── 2. Wait for the Encrypt executor to commit each output (status=VERIFIED) ─
-  await waitForVerified(connection, canMatchKp.publicKey, options);
-  await waitForVerified(connection, fillSizeKp.publicKey, options);
-  await waitForVerified(connection, clearingPriceKp.publicKey, options);
+  await waitForVerified(connection, canMatchPubkey, options);
+  await waitForVerified(connection, fillSizePubkey, options);
+  await waitForVerified(connection, clearingPricePubkey, options);
 
   // ── 3. request_decryption — snapshots digests onto MatchIntent ──────────
+  const methods = program.methods as LooseProgramMethods;
   const reqDecryptTx = await methods['requestDecryption']!(new BN(matchId.toString()))
     .accountsPartial({
       market,
       matchIntent,
-      canMatchCt: canMatchKp.publicKey,
-      fillSizeCt: fillSizeKp.publicKey,
-      clearingPriceCt: clearingPriceKp.publicKey,
+      canMatchCt: canMatchPubkey,
+      fillSizeCt: fillSizePubkey,
+      clearingPriceCt: clearingPricePubkey,
       keeperAuthority: keeperAuthority.publicKey,
     })
     .signers([keeperAuthority])
@@ -208,15 +238,15 @@ export async function runMatchCycle(
   // or the program would need to call request_decryption CPI on-chain.)
   const [canMatchPlain, fillSizePlain, clearingPlain] = await Promise.all([
     encryptSdk.requestThresholdDecrypt(
-      new Uint8Array(canMatchKp.publicKey.toBytes()),
+      new Uint8Array(canMatchPubkey.toBytes()),
       tryMatchTx,
     ),
     encryptSdk.requestThresholdDecrypt(
-      new Uint8Array(fillSizeKp.publicKey.toBytes()),
+      new Uint8Array(fillSizePubkey.toBytes()),
       tryMatchTx,
     ),
     encryptSdk.requestThresholdDecrypt(
-      new Uint8Array(clearingPriceKp.publicKey.toBytes()),
+      new Uint8Array(clearingPricePubkey.toBytes()),
       tryMatchTx,
     ),
   ]);
@@ -276,9 +306,9 @@ export async function runMatchCycle(
     matchId,
     matchIntent,
     matchRecord,
-    canMatchOut: canMatchKp.publicKey,
-    fillSizeOut: fillSizeKp.publicKey,
-    clearingPriceOut: clearingPriceKp.publicKey,
+    canMatchOut: canMatchPubkey,
+    fillSizeOut: fillSizePubkey,
+    clearingPriceOut: clearingPricePubkey,
   };
 }
 
@@ -366,6 +396,36 @@ function u64LeBytes(value: bigint): Buffer {
   return buf;
 }
 
+/** Anchor instruction discriminator: first 8 bytes of sha256("global:<name>"). */
+function anchorDisc(name: string): Buffer {
+  return createHash('sha256').update(`global:${name}`).digest().subarray(0, 8);
+}
+
+/**
+ * Encode a `try_match(match_id: u64, cpi_authority_bump: u8)` ix data buffer.
+ * Anchor-1 layout: 8-byte disc + 8-byte LE u64 + 1-byte u8.
+ */
+function encodeTryMatchData(matchId: BN, cpiAuthorityBump: number): Buffer {
+  const disc = anchorDisc('try_match');
+  const id = matchId.toArrayLike(Buffer, 'le', 8);
+  const bump = Buffer.from([cpiAuthorityBump]);
+  return Buffer.concat([disc, id, bump]);
+}
+
+/** Drop signer duplicates by pubkey so partialSign doesn't reject the same key twice. */
+function dedupeSigners(signers: Signer[]): Signer[] {
+  const seen = new Set<string>();
+  const out: Signer[] = [];
+  for (const s of signers) {
+    const k = s.publicKey.toBase58();
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 /**
  * One-time setup: ensure the keeper's payer has an `encrypt_deposit` PDA so
  * `execute_graph` rents from it. Idempotent — does nothing if the account
@@ -386,7 +446,10 @@ export async function ensureEncryptDeposit(
     return pdas;
   }
 
-  const data = Buffer.alloc(2);
+  // 18-byte ix data: disc(1) + bump(1) + 16 bytes reserved (matches the
+  // upstream voting/e2e demo). The trailing zeros are the deposit-amount
+  // field — leaving them zero defaults to the program's minimum.
+  const data = Buffer.alloc(18);
   data[0] = IX_CREATE_DEPOSIT;
   data[1] = pdas.depositBump;
 
