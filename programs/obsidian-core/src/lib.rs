@@ -223,7 +223,7 @@ pub mod obsidian_core {
     /// settlement tx. Persists the proof blob, marks the MatchRecord
     /// settled, and emits SettleFinalized.
     pub fn finalize_settlement(
-        ctx: Context<FinalizeSettlement>,
+        ctx: Context<SettlementOutcome>,
         _match_id: u64,
         btc_tx_proof: Vec<u8>,
     ) -> Result<()> {
@@ -256,7 +256,7 @@ pub mod obsidian_core {
     /// `reason_code` is keeper-defined (0 = unknown, 1 = btc_timeout,
     /// 2 = mpc_failure, 3 = invalid_proof, 4 = refund_path).
     pub fn fail_settlement(
-        ctx: Context<FinalizeSettlement>,
+        ctx: Context<SettlementOutcome>,
         _match_id: u64,
         reason_code: u16,
     ) -> Result<()> {
@@ -362,7 +362,7 @@ pub struct TryMatch<'info> {
 
 #[derive(Accounts)]
 #[instruction(match_id: u64)]
-pub struct FinalizeSettlement<'info> {
+pub struct SettlementOutcome<'info> {
     #[account(
         mut,
         has_one = market,
