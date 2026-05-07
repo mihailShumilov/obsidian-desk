@@ -387,7 +387,7 @@ function ProblemCard({
 }): JSX.Element {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 28 }}
+      initial={{ y: 28 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, amount: 0.3 }}
       transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
@@ -592,7 +592,7 @@ function HowItWorks({ onActivate }: { onActivate: () => void }): JSX.Element {
         {steps.map((s, i) => (
           <motion.div
             key={s.heading}
-            initial={{ opacity: 0, y: 32 }}
+            initial={{ y: 32 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.4 }}
             transition={{
@@ -683,7 +683,7 @@ function DualityCard({
 }): JSX.Element {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 32 }}
+      initial={{ y: 32 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, amount: 0.4 }}
       transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
@@ -727,7 +727,7 @@ function Traction({ onActivate }: { onActivate: () => void }): JSX.Element {
         {stats.map((s, i) => (
           <motion.div
             key={s.k}
-            initial={{ opacity: 0, y: 24 }}
+            initial={{ y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.3 }}
             transition={{
@@ -767,7 +767,7 @@ function Traction({ onActivate }: { onActivate: () => void }): JSX.Element {
         ].map((m, i) => (
           <motion.div
             key={m.n}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.4 }}
             transition={{
@@ -796,7 +796,7 @@ function Closing({ onActivate }: { onActivate: () => void }): JSX.Element {
     <Slide id="close" index={7} onActivate={onActivate} className="items-center">
       <div className="flex flex-col items-center text-center">
         <motion.span
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.4 }}
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
@@ -805,7 +805,7 @@ function Closing({ onActivate }: { onActivate: () => void }): JSX.Element {
           The dark pool is open
         </motion.span>
         <motion.h2
-          initial={{ opacity: 0, y: 24 }}
+          initial={{ y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.4 }}
           transition={{
@@ -820,7 +820,7 @@ function Closing({ onActivate }: { onActivate: () => void }): JSX.Element {
           <span className="text-cipher-cyan">Settle Bitcoin on Bitcoin.</span>
         </motion.h2>
         <motion.p
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.4 }}
           transition={{
@@ -834,7 +834,7 @@ function Closing({ onActivate }: { onActivate: () => void }): JSX.Element {
         </motion.p>
 
         <motion.div
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.4 }}
           transition={{
@@ -868,7 +868,7 @@ function Closing({ onActivate }: { onActivate: () => void }): JSX.Element {
 function SectionLabel({ children }: { children: ReactNode }): JSX.Element {
   return (
     <motion.p
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ y: 12 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, amount: 0.4 }}
       transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
@@ -882,7 +882,7 @@ function SectionLabel({ children }: { children: ReactNode }): JSX.Element {
 function SectionHeading({ children }: { children: ReactNode }): JSX.Element {
   return (
     <motion.h2
-      initial={{ opacity: 0, y: 24 }}
+      initial={{ y: 24 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, amount: 0.4 }}
       transition={{ duration: 0.7, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}

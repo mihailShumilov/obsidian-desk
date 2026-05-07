@@ -86,7 +86,7 @@ export function FounderSlide({
 
       <div className="relative z-10 mx-auto w-full max-w-6xl">
         <motion.p
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.4 }}
           transition={{ duration: 0.5 }}
@@ -96,7 +96,7 @@ export function FounderSlide({
         </motion.p>
 
         <motion.h2
-          initial={{ opacity: 0, y: 24 }}
+          initial={{ y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.4 }}
           transition={{ duration: 0.7, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
@@ -115,7 +115,7 @@ export function FounderSlide({
             ref={cardRef}
             onMouseMove={onCardMove}
             onMouseLeave={onCardLeave}
-            initial={{ opacity: 0, y: 32 }}
+            initial={{ y: 32 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.3 }}
             transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
@@ -175,7 +175,7 @@ export function FounderSlide({
           {/* Right: bio + stats + timeline */}
           <div className="flex flex-col gap-10">
             <motion.p
-              initial={{ opacity: 0, y: 16 }}
+              initial={{ y: 16 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, amount: 0.3 }}
               transition={{ duration: 0.6, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
@@ -193,7 +193,7 @@ export function FounderSlide({
               technical interviews to build the bench around me.
             </motion.p>
             <motion.p
-              initial={{ opacity: 0, y: 16 }}
+              initial={{ y: 16 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, amount: 0.3 }}
               transition={{ duration: 0.6, delay: 0.18, ease: [0.16, 1, 0.3, 1] }}
@@ -214,7 +214,7 @@ export function FounderSlide({
               {STATS.map((s, i) => (
                 <motion.div
                   key={s.l}
-                  initial={{ opacity: 0, y: 16 }}
+                  initial={{ y: 16 }}
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true, amount: 0.4 }}
                   transition={{

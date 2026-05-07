@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ObsidianLogo } from './logo';
-import { WalletButton } from './wallet-button';
+import { HeaderActions } from './header-actions';
 import { DWalletChip } from './dwallet-chip';
 
 const NAV = [
@@ -44,7 +44,7 @@ export function Header(): JSX.Element {
             <span className="size-1.5 rounded-full bg-cipher-cyan-dim" />
             {NETWORK}
           </span>
-          <WalletButton />
+          <HeaderActions />
         </div>
       </div>
     </header>
