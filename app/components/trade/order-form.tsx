@@ -21,10 +21,7 @@ const EXPIRIES = [
   { label: '24h', slots: 216_000 },
 ] as const;
 
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
-function scrambleChar(): string {
-  return ALPHABET[Math.floor(Math.random() * ALPHABET.length)]!;
-}
+import { randomCipherChar } from '@/lib/cipher-glyphs';
 
 export interface OrderFormSubmit {
   side: Side;
@@ -261,7 +258,7 @@ function ScrambleInput({
   // the parent re-render cycle (motion ticks), which is cheap and
   // intentionally chaotic.
   const display = scrambling
-    ? Array.from(value, () => scrambleChar()).join('')
+    ? Array.from(value, () => randomCipherChar()).join('')
     : value;
   return (
     <input

@@ -19,16 +19,7 @@
 
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
-
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
-
-function randGlyphs(length: number): string {
-  let out = '';
-  for (let i = 0; i < length; i++) {
-    out += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
-  }
-  return out;
-}
+import { randomCipherString } from '@/lib/cipher-glyphs';
 
 export interface CipherProps {
   /** If omitted, glyphs are generated fresh each tick. */
@@ -52,15 +43,15 @@ export function Cipher({
 
   useEffect(() => {
     if (cadenceMs === 0) {
-      setText(value ?? randGlyphs(length));
+      setText(value ?? randomCipherString(length));
       return;
     }
     if (value !== undefined) {
       setText(value);
       return;
     }
-    setText(randGlyphs(length));
-    const id = setInterval(() => setText(randGlyphs(length)), cadenceMs);
+    setText(randomCipherString(length));
+    const id = setInterval(() => setText(randomCipherString(length)), cadenceMs);
     return () => clearInterval(id);
   }, [cadenceMs, length, value]);
 

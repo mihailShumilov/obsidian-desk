@@ -24,19 +24,13 @@ import {
   BackSide,
 } from 'three';
 
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
+import { randomCipherString } from '@/lib/cipher-glyphs';
+
 const FACE_PIXELS = 256;
 const LINES_PER_FACE = 8;
 const CHARS_PER_LINE = 16;
 const CADENCE_MS = 800;
 
-function randString(len: number): string {
-  let out = '';
-  for (let i = 0; i < len; i++) {
-    out += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
-  }
-  return out;
-}
 
 function paintCipherFace(ctx: CanvasRenderingContext2D): void {
   // Backdrop — obsidian-800 with a soft cipher-cyan vignette
@@ -65,7 +59,7 @@ function paintCipherFace(ctx: CanvasRenderingContext2D): void {
   const lineHeight = (FACE_PIXELS - padding * 2) / LINES_PER_FACE;
   for (let i = 0; i < LINES_PER_FACE; i++) {
     const y = padding + lineHeight * i + lineHeight / 2;
-    ctx.fillText(randString(CHARS_PER_LINE), padding, y);
+    ctx.fillText(randomCipherString(CHARS_PER_LINE), padding, y);
   }
 }
 

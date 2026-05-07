@@ -20,16 +20,12 @@ import {
   type InputHTMLAttributes,
 } from 'react';
 import { cn } from '@/lib/utils';
+import { randomCipherString } from '@/lib/cipher-glyphs';
 
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
 const REVEAL_MS = 600;
 
 function maskFor(plain: string): string {
-  let out = '';
-  for (let i = 0; i < plain.length; i++) {
-    out += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
-  }
-  return out;
+  return randomCipherString(plain.length);
 }
 
 export interface CipherFieldProps
