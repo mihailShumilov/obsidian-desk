@@ -39,6 +39,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { encryptOrder } from '../sdk/src/encrypt.ts';
 import * as ikaSdk from '../sdk/src/ika.ts';
+import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../sdk/src/slots.ts';
 
 interface SeedOrder {
   side: 'bid' | 'ask';
@@ -144,13 +145,13 @@ async function main(): Promise<void> {
   await ikaSdk.lockPolicy(alice.id, {
     controller: program.programId.toBase58(),
     maxAmountSats: 1_000_000_000n,
-    expirySlots: 216_000,
+    expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
     rules: [],
   });
   await ikaSdk.lockPolicy(bob.id, {
     controller: program.programId.toBase58(),
     maxAmountSats: 1_000_000_000n,
-    expirySlots: 216_000,
+    expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
     rules: [],
   });
   console.log(`[seed-demo] alice dwallet=${alice.address}`);

@@ -12,6 +12,7 @@ import {
 import { address as btcAddress } from 'bitcoinjs-lib';
 import { buildSpendTx, networkFor } from '../src/btc.ts';
 import { VendorSDKUnavailableError } from '../src/errors.ts';
+import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../src/slots.ts';
 
 function realScriptFor(addr: string): string {
   // bitcoinjs-lib v7 returns Uint8Array; wrap in Buffer for hex serialization.
@@ -51,7 +52,7 @@ describe('ika (mock mode)', () => {
     const policy = {
       controller: PROGRAM_ID,
       maxAmountSats: 10_000_000n,
-      expirySlots: 216_000,
+      expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
       rules: [],
     };
     const r1 = await lockPolicy(dw.id, policy);

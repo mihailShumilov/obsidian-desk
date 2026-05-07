@@ -23,6 +23,7 @@ import { KeyShards } from '@/components/deposit/key-shards';
 import { CopyButton } from '@/components/deposit/copy-button';
 import { useDwalletStore } from '@/stores/dwallet';
 import { formatBtc, truncateAddress } from '@/lib/format';
+import { DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
 import {
   createDWalletAction,
   lockPolicyAction,
@@ -309,7 +310,7 @@ function LockStep({
   controller:           ObsiDesk... (program id)
   max_amount_per_tx:    ${formatBtc(maxAmount)} BTC (${maxAmount.toString()} sats)
   allowed_recipients:   <dynamic per match>
-  expiry_per_order:     24h (216_000 slots)`}
+  expiry_per_order:     24h (${DEFAULT_ORDER_EXPIRY_SLOTS.toLocaleString('en-US').replaceAll(',', '_')} slots)`}
       </pre>
       <div className="mt-5 flex items-center gap-3">
         <Button variant="ghost" onClick={onBack}>

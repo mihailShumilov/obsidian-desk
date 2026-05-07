@@ -14,14 +14,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Side } from '@/lib/order-state';
+import { randomCipherChar } from '@/lib/cipher-glyphs';
+import { SLOTS_PER_HOUR, DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
 
 const EXPIRIES = [
-  { label: '1h', slots: 9_000 },
-  { label: '6h', slots: 54_000 },
-  { label: '24h', slots: 216_000 },
+  { label: '1h', slots: SLOTS_PER_HOUR },
+  { label: '6h', slots: SLOTS_PER_HOUR * 6 },
+  { label: '24h', slots: DEFAULT_ORDER_EXPIRY_SLOTS },
 ] as const;
-
-import { randomCipherChar } from '@/lib/cipher-glyphs';
 
 export interface OrderFormSubmit {
   side: Side;

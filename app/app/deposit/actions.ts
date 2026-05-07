@@ -13,7 +13,7 @@
  * with `OBSIDIAN_ESPLORA_URL` (defaults to mempool.space's signet API).
  */
 
-import { ika } from '@obsidian-desk/sdk';
+import { ika, DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
 
 const PROGRAM_ID =
   process.env['NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID'] ??
@@ -42,11 +42,10 @@ export async function lockPolicyAction(
   dwalletId: string,
   maxAmountSats: string,
 ): Promise<LockPolicyResult> {
-  const expirySlots = 216_000;
   const result = await ika.lockPolicy(dwalletId, {
     controller: PROGRAM_ID,
     maxAmountSats: BigInt(maxAmountSats),
-    expirySlots,
+    expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
     rules: [],
   });
   return { policyAccountOnSolana: result.policyAccountOnSolana };

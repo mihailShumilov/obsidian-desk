@@ -13,6 +13,7 @@ import { CT_ID_LEN, encryptOrder } from '../sdk/src/encrypt.ts';
 import * as ikaSdk from '../sdk/src/ika.ts';
 import * as btcSdk from '../sdk/src/btc.ts';
 import type { SpendInput } from '../sdk/src/btc.ts';
+import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../sdk/src/slots.ts';
 import { pollOnce } from '../keeper/src/poll.ts';
 import type { ObsidianCore } from '../target/types/obsidian_core';
 
@@ -77,13 +78,13 @@ describe('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
     await ikaSdk.lockPolicy(alice.id, {
       controller: program.programId.toBase58(),
       maxAmountSats: 1_000_000_000n,
-      expirySlots: 216_000,
+      expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
       rules: [],
     });
     await ikaSdk.lockPolicy(bob.id, {
       controller: program.programId.toBase58(),
       maxAmountSats: 1_000_000_000n,
-      expirySlots: 216_000,
+      expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
       rules: [],
     });
 
