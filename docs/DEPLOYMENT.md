@@ -143,6 +143,43 @@ btc address) returned by devnet.
 The `assertNotMockOnMainnet` boot guard remains the backstop against
 running mock mode against any mainnet RPC.
 
+## 3.6 Keeper matching loop (try_match → request_decryption → finalize_decryption)
+
+The keeper drives matching against the on-chain Encrypt program via
+`execute_graph` CPI. Two surfaces ship today:
+
+**`runMatchCycle(program, market, pair, keeperAuthority, payer, opts)`** —
+exported from `keeper/src/matching.ts`. Runs one full cycle for a chosen
+pair of order PDAs. Allocates 3 fresh ciphertext keypair accounts, builds
+the 22-account `try_match` instruction (market + 2 orders + match_intent
++ 6 input cts + 3 output cts + 7 EncryptContext PDAs + keeper_authority +
+payer + system_program), waits for the executor to flip each output to
+`status=VERIFIED`, calls `request_decryption` (snapshots digests), reads
+the 3 plaintexts off-chain via gRPC, and submits `finalize_decryption`.
+
+**`tsx keeper/scripts/match-pair.ts <market> <orderA> <orderB>`** — CLI
+wrapper around `runMatchCycle`. Run against devnet to exercise the full
+flow end-to-end:
+
+```bash
+ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
+  ANCHOR_WALLET=~/.config/solana/keeper.json \
+  pnpm exec tsx keeper/scripts/match-pair.ts \
+    <MARKET_PDA> <ORDER_A_PDA> <ORDER_B_PDA>
+```
+
+The script logs each phase (try_match, executor wait, request_decryption,
+gRPC reads, finalize_decryption) so an operator can pinpoint failures.
+Local-validator runs fail at "Encrypt config not found" because the
+Encrypt program is only deployed on devnet — that is the expected
+behaviour for local testing.
+
+**Settlement-to-BTC** still flows through `pollOnce` in `keeper/src/poll.ts`,
+which the daemon (`keeper/src/index.ts`) calls every 3 seconds. The
+matching cycle and the settlement cycle are decoupled: a `MatchRecord`
+written by `finalize_decryption` lands in the same memcmp-filtered
+`pollOnce` queue the daemon already drives.
+
 ## 4. Keeper → Fly.io (planned)
 
 ```bash

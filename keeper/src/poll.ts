@@ -7,10 +7,10 @@
  */
 
 import BN from 'bn.js';
-import { utils, type Program } from '@coral-xyz/anchor';
+import { utils } from '@coral-xyz/anchor';
 import type { PublicKey } from '@solana/web3.js';
 import { btc as btcSdkDefault, type SpendInput } from '@obsidian-desk/sdk';
-import type { LooseProgramMethods } from './anchor-shims.ts';
+import type { LooseProgram, LooseProgramMethods } from './anchor-shims.ts';
 
 /**
  * Byte offset of `settle_status` inside a Borsh-serialized `MatchRecord`:
@@ -97,19 +97,6 @@ interface StoredMatchRecord {
   bump: number;
   createdAt: BN;
 }
-
-// We accept a loose Program. The keeper doesn't need full type-safety on the
-// IDL — the obsidian-core ObsidianCore type lives at target/types/ which is
-// awkward to import across the workspace boundary. Using `Program<any>` here
-// trades local type-safety for keeper-side flexibility (callers in the test
-// suite pass the strongly-typed Program<ObsidianCore>).
-type LooseProgram = Program<{
-  // Bare-minimum shape to satisfy the @coral-xyz/anchor Idl constraint.
-  address: string;
-  metadata: { name: string; version: string; spec: string; description?: string };
-  instructions: never[];
-  accounts: never[];
-}>;
 
 /** Run one settlement pass. Returns a structured report for the caller to log. */
 export async function pollOnce(
