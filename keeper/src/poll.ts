@@ -61,15 +61,32 @@ interface BtcNamespace {
     outputs: unknown;
     network: 'signet' | 'testnet';
   };
+  broadcastTx(
+    hex: string,
+    network?: 'signet' | 'testnet',
+    mode?: 'mock' | 'real' | 'auto',
+  ): Promise<{ value: string; mode: 'real-ok' | 'real-failed-fallback' | 'mock'; fallbackReason?: string }>;
 }
+
+/**
+ * UTXO provider — returns the inputs the keeper will spend from the seller's
+ * dWallet. Async to support both real esplora lookups and mocked synthesis.
+ * Returning an empty array signals "no spendable UTXOs" — keeper marks the
+ * match as failed rather than building a fundless tx.
+ */
+export type UtxoProvider = (address: string) => Promise<ReadonlyArray<SpendInput>>;
 
 export interface PollOptions {
   /** Arbitrary label — shows up in stdout logs. */
   keeperId: string;
   /** BTC feerate (sat/vB). Used for the settlement tx. */
   feerateSatPerVB: number;
-  /** One synthetic UTXO per dWallet (mock mode). Real mode fetches via esplora. */
-  mockUtxoProvider: (address: string) => SpendInput;
+  /** Yields the UTXOs to spend from the seller's dWallet. */
+  utxoProvider: UtxoProvider;
+  /** BTC network to settle on. Defaults to signet. */
+  btcNetwork?: 'signet' | 'testnet';
+  /** Broadcast mode passed to btcSdk.broadcastTx. Defaults to `auto`. */
+  broadcastMode?: 'mock' | 'real' | 'auto';
   /** Override the Ika SDK namespace — defaults to `@obsidian-desk/sdk/ika`. */
   ikaSdk?: IkaNamespace;
   /** Override the BTC SDK namespace — defaults to `@obsidian-desk/sdk/btc`. */
@@ -78,7 +95,13 @@ export interface PollOptions {
 
 export interface PollReport {
   attempted: Array<{ matchRecord: string; matchId: string }>;
-  settled: Array<{ matchRecord: string; matchId: string; btcSignedHexLen: number }>;
+  settled: Array<{
+    matchRecord: string;
+    matchId: string;
+    btcSignedHexLen: number;
+    btcTxid: string;
+    broadcastMode: 'real-ok' | 'real-failed-fallback' | 'mock';
+  }>;
   failed: Array<{ matchRecord: string; matchId: string; reason: string }>;
 }
 
@@ -103,7 +126,13 @@ export async function pollOnce(
   program: LooseProgram,
   options: PollOptions,
 ): Promise<PollReport> {
-  const { keeperId, feerateSatPerVB, mockUtxoProvider } = options;
+  const {
+    keeperId,
+    feerateSatPerVB,
+    utxoProvider,
+    btcNetwork = 'signet',
+    broadcastMode = 'auto',
+  } = options;
   // Lazy-resolve the default sdk namespace so callers in tests can inject
   // their own instance (sharing the in-memory mock store).
   const ikaSdk =
@@ -170,13 +199,20 @@ export async function pollOnce(
       }
 
       const fillSats = BigInt(account.fillSizeDecrypted.toString());
-      const utxo = mockUtxoProvider(sellerAddress);
+      const utxos = await utxoProvider(sellerAddress);
+      if (utxos.length === 0) {
+        throw new Error(
+          `no spendable UTXOs for seller ${sellerAddress.slice(0, 16)}… ` +
+            `— fund the dWallet from a signet faucet before placing orders`,
+        );
+      }
       const unsigned = btcSdk.buildSpendTx(
         sellerAddress,
         buyerAddress,
         fillSats,
         feerateSatPerVB,
-        [utxo],
+        utxos,
+        btcNetwork,
       );
 
       const { signedTxHex } = await ikaSdk.requestSign(sellerId, unsigned, {
@@ -184,9 +220,21 @@ export async function pollOnce(
         matchId: BigInt(matchIdStr),
       });
 
-      // Finalize on Solana. Proof blob = raw signed BTC tx hex bytes; P9
-      // will replace this with an SPV proof once the keeper polls signet.
-      const proofBytes = Buffer.from(signedTxHex, 'hex');
+      // Broadcast to signet (auto-fallback to local txid derivation if
+      // mempool.space is unreachable). The returned txid goes into
+      // `btc_tx_proof` so /positions can render mempool.space/<network>/tx/<id>.
+      const broadcast = await btcSdk.broadcastTx(signedTxHex, btcNetwork, broadcastMode);
+      if (broadcast.fallbackReason) {
+        console.warn(
+          `[keeper ${keeperId}] broadcast fell back to mock for match ` +
+            `${matchIdStr}: ${broadcast.fallbackReason}`,
+        );
+      }
+
+      // Proof = the 32-byte txid. UI renders mempool.space/<net>/tx/<hex>.
+      // In real mode this is the real signet txid; in mock/fallback it's a
+      // sha-256 of the signed hex — UI may 404 if it tries to resolve.
+      const proofBytes = Buffer.from(broadcast.value, 'hex');
       const methods = program.methods as LooseProgramMethods;
       await methods['finalizeSettlement']!(new BN(matchIdStr), proofBytes)
         .accountsPartial({
@@ -200,11 +248,14 @@ export async function pollOnce(
         matchRecord: publicKey.toBase58(),
         matchId: matchIdStr,
         btcSignedHexLen: signedTxHex.length,
+        btcTxid: broadcast.value,
+        broadcastMode: broadcast.mode,
       });
       console.log(
         `[keeper ${keeperId}] settled match ${matchIdStr} at ${publicKey
           .toBase58()
-          .slice(0, 12)}… (btc hex ${signedTxHex.length} chars)`,
+          .slice(0, 12)}… btc=${broadcast.value.slice(0, 12)}… ` +
+          `(${broadcast.mode}, ${signedTxHex.length} hex chars)`,
       );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

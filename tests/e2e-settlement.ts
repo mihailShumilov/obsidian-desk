@@ -161,7 +161,9 @@ describe.skip('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
     const report = await pollOnce(program as never, {
       keeperId: 'e2e',
       feerateSatPerVB: 4,
-      mockUtxoProvider,
+      utxoProvider: mockUtxoProvider,
+      btcNetwork: 'signet',
+      broadcastMode: 'mock',
       // Inject this test's SDK namespaces so the keeper sees the SAME
       // mock dWallet store we just populated.
       ikaSdk,
@@ -177,17 +179,20 @@ describe.skip('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
     // ── 5. Final state ──────────────────────────────────────────────────
     const finalRec = await program.account.matchRecord.fetch(matchRecord);
     expect(finalRec.settleStatus).to.deep.eq({ settled: {} });
-    expect(finalRec.btcTxProof.length).to.be.greaterThan(50, 'proof bytes recorded');
+    // Proof is the 32-byte broadcast txid (real signet txid in real mode,
+    // sha-256 of the signed hex in mock/fallback mode). UI renders it as
+    // mempool.space/<network>/tx/<hex>.
+    expect(finalRec.btcTxProof.length).to.eq(32, 'proof = 32-byte txid');
     expect(finalRec.finalizedAt.gt(new BN(0))).to.eq(true);
-
-    // Just to be explicit: the proof equals signed BTC tx hex bytes.
-    expect(Buffer.from(finalRec.btcTxProof).toString('hex')).to.match(/^[0-9a-f]+$/);
+    expect(Buffer.from(finalRec.btcTxProof).toString('hex')).to.match(/^[0-9a-f]{64}$/);
 
     // Idempotency: a second poll should NOT re-process our (now Settled) record.
     const second = await pollOnce(program as never, {
       keeperId: 'e2e',
       feerateSatPerVB: 4,
-      mockUtxoProvider,
+      utxoProvider: mockUtxoProvider,
+      btcNetwork: 'signet',
+      broadcastMode: 'mock',
     });
     const oursSecond = second.attempted.find((r) => r.matchRecord === matchRecordB58);
     expect(oursSecond, 'settled record should not appear in second poll').to.be.undefined;

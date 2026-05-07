@@ -78,10 +78,19 @@ services:
       NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID: H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
       NEXT_PUBLIC_NETWORK: devnet
       OBSIDIAN_ESPLORA_URL: https://mempool.space/signet/api
-      OBSIDIAN_ENCRYPT_MODE: mock
-      OBSIDIAN_IKA_MODE: mock
+      # Auto-fallback: try the live pre-alpha networks first, fall back to
+      # mock if they're down or unreachable. See sdk/src/mode.ts.
+      OBSIDIAN_ENCRYPT_MODE: ${OBSIDIAN_ENCRYPT_MODE:-mock}
+      OBSIDIAN_IKA_MODE: ${OBSIDIAN_IKA_MODE:-auto}
+      OBSIDIAN_BTC_MODE: ${OBSIDIAN_BTC_MODE:-auto}
+      # Shared file-backed dWallet store (closes gap I2 across processes:
+      # the Next.js server writes here on /deposit, the keeper reads from
+      # here when settling). Mounted as a named volume below.
+      OBSIDIAN_MOCK_STORE_PATH: /var/obsidian/keys/mock-keys.json
     ports:
       - '13000:3000'
+    volumes:
+      - obsidian-keys:/var/obsidian/keys
     # `solana-validator` runs under the `local-rpc` profile (opt-in) —
     # don't make app a hard depend, otherwise `docker compose up`
     # without the profile blocks forever waiting for it. Users who do
@@ -112,7 +121,11 @@ services:
       ANCHOR_PROVIDER_URL: ${SOLANA_INTERNAL_RPC:-http://host.docker.internal:18899}
       ANCHOR_WALLET: /run/secrets/keeper_keypair.json
       OBSIDIAN_PROGRAM_ID: H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
-      OBSIDIAN_IKA_MODE: mock
+      # Auto-fallback by default — try real Ika MPC, fall back to mock if
+      # pre-alpha network is unreachable. Override per-deploy via env.
+      OBSIDIAN_IKA_MODE: ${OBSIDIAN_IKA_MODE:-auto}
+      OBSIDIAN_BTC_MODE: ${OBSIDIAN_BTC_MODE:-auto}
+      OBSIDIAN_MOCK_STORE_PATH: /var/obsidian/keys/mock-keys.json
       KEEPER_POLL_MS: '3000'
       KEEPER_PORT: '3001'
       KEEPER_FEERATE: '4'
@@ -129,6 +142,10 @@ services:
       # Path matches the keeper's `process.cwd()` (= /app inside the
       # deployed bundle) + the `loadIdl()` lookup at target/idl/...
       - ./target/idl:/app/target/idl:ro
+      # Shared dWallet store with the app container — both ends read/write
+      # the same JSON file so deposit-page-created dWallets are visible to
+      # the keeper at settle time.
+      - obsidian-keys:/var/obsidian/keys
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3001/status']
       interval: 30s
@@ -144,3 +161,7 @@ secrets:
 
 volumes:
   solana-ledger:
+  # Shared between the `app` and `keeper` services so the file-backed
+  # mock dWallet store (sdk/src/mock-store.ts) survives across the two
+  # process boundaries — closure of gap I2 for the demo path.
+  obsidian-keys:

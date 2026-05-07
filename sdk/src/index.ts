@@ -16,6 +16,20 @@ export * from './errors.ts';
 export { SLOTS_PER_HOUR, DEFAULT_ORDER_EXPIRY_SLOTS } from './slots.ts';
 export { DEFAULT_OBSIDIAN_PROGRAM_ID } from './program-id.ts';
 export { assertNotMockOnMainnet, isMainnetEndpoint } from './safety.ts';
+export {
+  resolveMode,
+  tryReal,
+  unwrap,
+  isTransientError,
+  setModeLogger,
+} from './mode.ts';
+export type {
+  Mode,
+  ResolvedMode,
+  Surface,
+  ModeResult,
+  ModeLogger,
+} from './mode.ts';
 
 // Top-level re-exports for the most-used public types.
 export type { Side, EncryptedOrderBlob, EncryptMode } from './encrypt.ts';

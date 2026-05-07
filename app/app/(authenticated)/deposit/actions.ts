@@ -44,17 +44,22 @@ export interface CreateDWalletResult {
   id: string;
   chain: string;
   address: string;
+  /** 'real-ok' if the dWallet was created via Ika MPC DKG, 'real-failed-fallback'
+   *  if Ika was unreachable and we synthesised a local key, 'mock' if explicit
+   *  mock mode. UI badges show this so users know whether their dWallet is
+   *  network-held or process-local. */
+  mode: 'real-ok' | 'real-failed-fallback' | 'mock';
 }
 
 /**
  * `walletPubkey` is the Phantom-connected Solana pubkey from the client.
- * In mock mode it acts as the creator-binding token: subsequent
- * `lockPolicyAction` calls must pass the same pubkey or be rejected.
+ * It binds the dWallet to the caller: subsequent `lockPolicyAction` calls
+ * must pass the same pubkey or be rejected.
  *
  * This is NOT a signature check — anyone could pass any pubkey. Real
- * ownership verification arrives with Ika MPC (gap I1, closure plan in
- * docs/gaps.md). Until then, the binding limits grief to "attacker who
- * knows both the dwallet id AND the original creator's wallet pubkey".
+ * ownership verification arrives with on-chain MessageApproval (gap I3
+ * closure). Until then, the binding limits grief to "attacker who knows
+ * both the dwallet id AND the original creator's wallet pubkey".
  */
 export async function createDWalletAction(
   walletPubkey: string,
@@ -63,11 +68,12 @@ export async function createDWalletAction(
     throw new Error('createDWalletAction: walletPubkey is required');
   }
   const dw = await ika.createDWallet('bitcoin-signet', { creator: walletPubkey });
-  return { id: dw.id, chain: dw.chain, address: dw.address };
+  return { id: dw.id, chain: dw.chain, address: dw.address, mode: dw.mode };
 }
 
 export interface LockPolicyResult {
   policyAccountOnSolana: string;
+  mode: 'real-ok' | 'real-failed-fallback' | 'mock';
 }
 
 export async function lockPolicyAction(
@@ -88,7 +94,10 @@ export async function lockPolicyAction(
     },
     { caller: walletPubkey },
   );
-  return { policyAccountOnSolana: result.policyAccountOnSolana };
+  return {
+    policyAccountOnSolana: result.policyAccountOnSolana,
+    mode: result.mode,
+  };
 }
 
 export interface AddressBalance {

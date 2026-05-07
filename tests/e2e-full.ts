@@ -183,7 +183,9 @@ describe.skip('e2e:full — Alice + Bob → two matches → one keeper pass sett
     const report = await pollOnce(program as never, {
       keeperId: 'e2e-full',
       feerateSatPerVB: 4,
-      mockUtxoProvider,
+      utxoProvider: mockUtxoProvider,
+      btcNetwork: 'signet',
+      broadcastMode: 'mock',
       ikaSdk,
       btcSdk,
     });
@@ -200,19 +202,20 @@ describe.skip('e2e:full — Alice + Bob → two matches → one keeper pass sett
     for (const mr of matchRecords) {
       const rec = await program.account.matchRecord.fetch(mr);
       expect(rec.settleStatus).to.deep.eq({ settled: {} });
-      // Proof bytes encode a hex BTC tx — coarse sanity: even count, hex.
-      expect(rec.btcTxProof.length).to.be.greaterThan(50, 'proof bytes recorded');
+      // Proof = 32-byte signet broadcast txid.
+      expect(rec.btcTxProof.length).to.eq(32, 'proof = 32-byte txid');
       expect(rec.finalizedAt.gt(new BN(0))).to.eq(true);
       const proofHex = Buffer.from(rec.btcTxProof).toString('hex');
-      expect(proofHex.length % 2).to.eq(0);
-      expect(proofHex).to.match(/^[0-9a-f]+$/);
+      expect(proofHex).to.match(/^[0-9a-f]{64}$/);
     }
 
     // ── 6. Idempotency: second pass should NOT re-process ──────────────
     const second = await pollOnce(program as never, {
       keeperId: 'e2e-full',
       feerateSatPerVB: 4,
-      mockUtxoProvider,
+      utxoProvider: mockUtxoProvider,
+      btcNetwork: 'signet',
+      broadcastMode: 'mock',
       ikaSdk,
       btcSdk,
     });

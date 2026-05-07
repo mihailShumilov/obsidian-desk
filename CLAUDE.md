@@ -19,11 +19,16 @@ Before generating ANY code, re-read the relevant prompt from docs/PROMPTS.md and
 - Week 1 intentionally uses plaintext scaffolding to prove the data flow — that is expected and not a violation of the above.
 - Native BTC (no bridge), encrypted orderbook (no leakage), and dark-UI polish are the differentiators — never cut them.
 
-## Current state (post-P11 closures)
-- Real-mode Encrypt + Ika SDK is wired against pre-alpha gRPC on Solana devnet (gaps E5 + I0 closed). Smoke test: `node sdk/scripts/devnet-smoke.mjs`.
-- `EncryptedOrder` / `MatchIntent` hold 32-byte ciphertext-account refs (gap E1 closed); settlement is `request_decryption` → `finalize_decryption` with on-chain digest verification (E3 + E4 closed).
+## Current state (post-Scope-B work, 2026-05-07)
+- **Tri-state mode** (`mock` | `real` | `auto`): every real-network call goes through `tryReal()` in `sdk/src/mode.ts`. Default is `auto` — try real, fall back to mock on transient/network failure (8s timeout). Logical errors throw without fallback. Each call emits structured JSON to stderr (`[obsidian-mode]`).
+- **File-backed dWallet store** (gap I2 CLOSED): `sdk/src/mock-store.ts::MockStore` persists to `~/.obsidian-mock-keys.json` (overridable via `OBSIDIAN_MOCK_STORE_PATH`). Atomic temp+rename writes, 0600 perms, BigInt+Uint8Array round-trip via tagged objects. Docker compose mounts a shared `obsidian-keys` named volume across `app` + `keeper` so the deposit page and the keeper see the same dWallets.
+- **Real signet broadcast**: `sdk/src/btc.ts::broadcastTx` POSTs to `mempool.space/<network>/api/tx` with auto-fallback. `getAddressUtxos` fetches real esplora UTXOs. The keeper feeds the returned 32-byte txid into `btc_tx_proof` so `/positions` renders a mempool.space link that resolves on real broadcasts.
+- **Gap I1 sign-surface CLOSED**: `sdk/src/ika.ts::requestSign` real-mode now extracts the BIP-143 sighash, calls Ika gRPC `requestPresign` + `requestSign` with the sighash as digest, normalises the returned `(r||s)` to low-s (BIP-62), DER-encodes, **verifies locally before attaching** (catches hash_scheme mismatches), and finalises the PSBT into broadcast-ready hex. Unit test `external-sig path produces the same finalised tx as single-key signAndFinalize` proves byte-equivalence with the bitcoinjs-lib internal flow.
+- Real-mode Encrypt + Ika SDK still wired against pre-alpha gRPC on devnet (gaps E5 + I0 closed). Smoke test: `node sdk/scripts/devnet-smoke.mjs`.
+- `EncryptedOrder` / `MatchIntent` hold 32-byte ciphertext-account refs (E1 closed); settlement is `request_decryption` → `finalize_decryption` with on-chain digest verification (E3 + E4 closed).
 - The `#[encrypt_fn] match_orders_graph` DSL dispatches to the deployed Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` on devnet; obsidian-core is at `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`.
-- One residual upstream blocker: **gap E2-residual** — `encrypt-anchor` 0.1.0's `invoke_execute_graph` demotes the outer-tx signer flag on output ciphertext accounts, which fails our 6-input/3-output graph at depth 2. On-chain DSL graph + 22-account instruction shape are complete; closure waits on upstream or vendoring the helper.
+- **Residual upstream blocker — gap E2-residual**: `encrypt-anchor` 0.1.0's `invoke_execute_graph` demotes the outer-tx signer flag on output ciphertext accounts, failing our 6-input/3-output graph at depth 2. **The keeper's match decision runs off-chain in the meantime** (`keeper/src/matching.ts`). Closure path documented in `docs/gaps.md` E2-residual: vendor + patch the helper, repoint Cargo.toml, redeploy.
+- **Residual gap I4 (new)**: on-chain `MessageApproval` for keeper-presented Ika auth (currently the keeper authenticates with its own keypair, not the seller's). Documented in `docs/gaps.md` I4. Auto-fallback covers the demo path.
 
 ## Pinned versions
 - Node.js 24 LTS, pnpm 9+

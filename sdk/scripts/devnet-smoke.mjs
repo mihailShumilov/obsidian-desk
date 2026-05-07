@@ -22,10 +22,12 @@ import { Keypair } from '@solana/web3.js';
 // sdk/src/index.ts) — the gRPC-pulling code is opt-in via subpath imports.
 import * as encrypt from '../dist/encrypt.js';
 import * as ika from '../dist/ika.js';
+import * as btc from '../dist/btc.js';
 import { describeCiphertext } from '../dist/encrypt.js';
 
 process.env.OBSIDIAN_ENCRYPT_MODE = 'real';
 process.env.OBSIDIAN_IKA_MODE = 'real';
+process.env.OBSIDIAN_BTC_MODE = 'real';
 
 let failed = 0;
 function pass(label) { console.log(`  ✓ ${label}`); }
@@ -82,6 +84,38 @@ if (dw) {
     pass(`lockPolicy → ${r.policyAccountOnSolana}`);
   } catch (e) { fail('lockPolicy', e); }
 }
+
+console.log('\nBitcoin signet (mempool.space esplora) smoke');
+
+// Use a known-funded signet address. The "burn" P2WPKH for signet faucets
+// has historical UTXOs that won't go away, so this stays stable across runs.
+// Fallback: any address that's been on signet long enough to accumulate confs.
+const SIGNET_PROBE_ADDR = process.env.OBSIDIAN_SIGNET_PROBE_ADDR
+  ?? 'tb1qq2zh6uqv9z2k4yptm5p5zw69flqxe4ecyu5me5';
+
+try {
+  const r = await btc.getAddressUtxos(SIGNET_PROBE_ADDR, 'signet', 'real');
+  if (r.mode !== 'real-ok') throw new Error(`expected real-ok, got ${r.mode}`);
+  pass(`getAddressUtxos(${SIGNET_PROBE_ADDR.slice(0, 14)}…) → ${r.value.length} UTXOs (${r.latencyMs}ms)`);
+} catch (e) { fail('getAddressUtxos', e); }
+
+try {
+  // Don't actually broadcast — just confirm auto-mode falls back cleanly when
+  // we point at a closed port. Real broadcast happens in the e2e settlement
+  // test where a funded UTXO produces a valid signed tx.
+  const prev = process.env.OBSIDIAN_ESPLORA_SIGNET_URL;
+  process.env.OBSIDIAN_ESPLORA_SIGNET_URL = 'http://127.0.0.1:1';
+  try {
+    const r = await btc.broadcastTx('deadbeef', 'signet', 'auto');
+    if (r.mode !== 'real-failed-fallback') {
+      throw new Error(`expected fallback, got ${r.mode}`);
+    }
+    pass(`broadcastTx auto-fallback works (${r.fallbackReason?.slice(0, 60)}…)`);
+  } finally {
+    if (prev === undefined) delete process.env.OBSIDIAN_ESPLORA_SIGNET_URL;
+    else process.env.OBSIDIAN_ESPLORA_SIGNET_URL = prev;
+  }
+} catch (e) { fail('broadcastTx auto-fallback', e); }
 
 console.log(`\n${failed === 0 ? 'OK' : `FAILED (${failed})`}`);
 process.exit(failed === 0 ? 0 : 1);

@@ -31,15 +31,14 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { SpendInput } from '@obsidian-desk/sdk';
 import {
   btc as btcSdk,
   DEFAULT_OBSIDIAN_PROGRAM_ID,
   assertNotMockOnMainnet,
+  resolveMode,
 } from '@obsidian-desk/sdk';
-import { pollOnce, type PollReport } from './poll.ts';
+import { pollOnce, type PollReport, type UtxoProvider } from './poll.ts';
 import { loadKeypair } from './anchor-shims.ts';
-import { createHash } from 'node:crypto';
 
 const POLL_MS = Number(process.env['KEEPER_POLL_MS'] ?? 3_000);
 const PORT = Number(process.env['KEEPER_PORT'] ?? 13_001);
@@ -66,23 +65,30 @@ function loadIdl(): Idl {
 }
 
 /**
- * In mock mode the keeper can't fetch real UTXOs, so we synthesize one per
- * dWallet address on demand. Deterministic txid = sha256-style digest of
- * the address so repeated calls for the same address produce the same UTXO.
- * In real mode P9 replaces this with an esplora API call.
+ * UTXO provider — calls esplora when BTC mode is `real` or `auto`, falls back
+ * to a synthesised 1-BTC UTXO if esplora is unreachable (or mode is `mock`).
+ * The auto-fallback is what lets the demo keep running when mempool.space
+ * blips, while still preferring real UTXOs by default.
+ *
+ * Empty array → keeper marks the match as failed with "no funded UTXOs".
+ * Operationally: pre-fund the seller dWallet from a signet faucet before
+ * the demo, otherwise every match fails until funding lands.
  */
-function mockUtxoProvider(address: string): SpendInput {
-  const h = createHash('sha256').update(address).digest('hex');
-  return {
-    txid: h,
-    vout: 0,
-    // 1 BTC — enough to cover any reasonable mock fill with change.
-    valueSats: 100_000_000n,
-    // Real script for `address` so the SDK's requestSign can produce a
-    // valid signature instead of failing with "non-segwit script".
-    scriptPubKeyHex: btcSdk.scriptForAddress(address, 'signet'),
-  };
-}
+const BTC_NETWORK: 'signet' | 'testnet' = 'signet';
+const BTC_MODE = resolveMode('btc');
+
+const utxoProvider: UtxoProvider = async (address) => {
+  const r = await btcSdk.getAddressUtxos(address, BTC_NETWORK, BTC_MODE);
+  if (r.fallbackReason) {
+    console.warn(
+      `[keeper] esplora UTXO fetch fell back to synthetic for ` +
+        `${address.slice(0, 16)}…: ${r.fallbackReason}`,
+    );
+  }
+  // Sort by value descending so the spend tx picks the largest UTXO first
+  // (minimises change-output count for small fills).
+  return [...r.value].sort((a, b) => Number(b.valueSats - a.valueSats));
+};
 
 function bumpMetrics(metrics: MetricsSnapshot, report: PollReport, err?: unknown): void {
   metrics.ticks += 1;
@@ -174,7 +180,9 @@ async function main(): Promise<void> {
       const report = await pollOnce(program as never, {
         keeperId: 'devnet-local',
         feerateSatPerVB: FEERATE,
-        mockUtxoProvider,
+        utxoProvider,
+        btcNetwork: BTC_NETWORK,
+        broadcastMode: BTC_MODE,
       });
       bumpMetrics(metrics, report);
     } catch (err) {

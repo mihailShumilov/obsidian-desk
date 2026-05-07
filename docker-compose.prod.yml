@@ -1,17 +1,26 @@
-# ObsidianDesk — DEMO overlay (not production-grade).
+# ObsidianDesk — devnet/signet production overlay.
 #
-# This file ships with OBSIDIAN_ENCRYPT_MODE=mock and OBSIDIAN_IKA_MODE=mock.
-# That combination is suitable for hackathon demos on devnet/signet only.
-# DO NOT deploy this overlay against a mainnet RPC — the SDK's safety guard
-# (assertNotMockOnMainnet) refuses to boot the keeper or first server action
-# in that case, and you would be running encrypted-orderbook semantics with
-# plaintext-recoverable ciphertexts. Real-mode closure is tracked in
-# docs/gaps.md (gap E5 / I0).
+# Layered on top of docker-compose.yml; drops the local validator (use a
+# real Solana RPC) and pins images to GHCR.
 #
-# Layered on top of docker-compose.yml; drops the local validator entirely
-# (use a real Solana RPC) and removes the dev-only image rebuild config:
+# As of 2026-05-07 this overlay defaults to **auto mode** for every subsystem
+# (Encrypt, Ika, BTC). `auto` tries the real pre-alpha networks first and
+# falls back to mock on transient failure — see sdk/src/mode.ts. The base
+# `docker-compose.yml` provides the same defaults for non-prod runs; this
+# overlay just inherits them and adds GHCR pinning + restart policy.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Each subsystem can be overridden per-deploy:
+#   OBSIDIAN_ENCRYPT_MODE=auto|real|mock
+#   OBSIDIAN_IKA_MODE=auto|real|mock
+#   OBSIDIAN_BTC_MODE=auto|real|mock
+#
+# `assertNotMockOnMainnet` in the SDK refuses `mock` or `auto` on mainnet —
+# only explicit `real` clears the gate (auto can fall back to mock at any
+# time, which would expose plaintext on a live-value chain).
+#
+# Compose command:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     --env-file .env.production up -d
 #
 # Required environment (host or .env.production):
 #   SOLANA_RPC                           https://api.devnet.solana.com (or your node)
@@ -36,8 +45,13 @@ services:
       NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID: ${OBSIDIAN_PROGRAM_ID:?set OBSIDIAN_PROGRAM_ID}
       NEXT_PUBLIC_NETWORK: ${NEXT_PUBLIC_NETWORK:-devnet}
       OBSIDIAN_ESPLORA_URL: ${OBSIDIAN_ESPLORA_URL:-https://mempool.space/signet/api}
-      OBSIDIAN_ENCRYPT_MODE: mock
-      OBSIDIAN_IKA_MODE: mock
+      # Tri-state modes — default `auto` (try real, fall back to mock on
+      # transient failure). See sdk/src/mode.ts.
+      OBSIDIAN_ENCRYPT_MODE: ${OBSIDIAN_ENCRYPT_MODE:-mock}
+      OBSIDIAN_IKA_MODE: ${OBSIDIAN_IKA_MODE:-auto}
+      OBSIDIAN_BTC_MODE: ${OBSIDIAN_BTC_MODE:-auto}
+      # Shared file-backed dWallet store across app + keeper.
+      OBSIDIAN_MOCK_STORE_PATH: /var/obsidian/keys/mock-keys.json
     depends_on: !reset []
     deploy:
       resources:
@@ -54,7 +68,9 @@ services:
       ANCHOR_PROVIDER_URL: ${SOLANA_RPC:?set SOLANA_RPC}
       ANCHOR_WALLET: /run/secrets/keeper_keypair.json
       OBSIDIAN_PROGRAM_ID: ${OBSIDIAN_PROGRAM_ID:?set OBSIDIAN_PROGRAM_ID}
-      OBSIDIAN_IKA_MODE: mock
+      OBSIDIAN_IKA_MODE: ${OBSIDIAN_IKA_MODE:-auto}
+      OBSIDIAN_BTC_MODE: ${OBSIDIAN_BTC_MODE:-auto}
+      OBSIDIAN_MOCK_STORE_PATH: /var/obsidian/keys/mock-keys.json
       KEEPER_POLL_MS: ${KEEPER_POLL_MS:-3000}
       KEEPER_PORT: '3001'
       KEEPER_FEERATE: ${KEEPER_FEERATE:-4}

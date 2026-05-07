@@ -85,14 +85,15 @@ export async function bootstrapFreshMarket(
  * Synthetic UTXO provider for keeper poll runs in mock mode. Derives the
  * txid deterministically from the address so two test runs that hit the
  * same mock dWallet see the same UTXO; valueSats is hardcoded at 1 BTC
- * which is more than any test settles.
+ * which is more than any test settles. Async to match the keeper's
+ * UtxoProvider contract.
  */
-export function mockUtxoProvider(address: string): SpendInput {
+export const mockUtxoProvider = async (address: string): Promise<SpendInput[]> => {
   const h = createHash('sha256').update(address).digest('hex');
-  return {
+  return [{
     txid: h,
     vout: 0,
     valueSats: 100_000_000n,
     scriptPubKeyHex: btcSdk.scriptForAddress(address, 'signet'),
-  };
-}
+  }];
+};

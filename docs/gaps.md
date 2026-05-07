@@ -200,37 +200,81 @@ by `sdk/scripts/devnet-smoke.mjs`.
 notices preserved verbatim. Re-sync from upstream when 0.1.2+ ships a
 compiled `dist/`.
 
-### I1. No real DKG (distributed key generation) without network access
-**Where:** mock `createDWallet` synthesizes a P2WPKH key locally with
-`bitcoinjs-lib`.
+### I1. ~~No real DKG / sign-surface~~ — **CLOSED for the sign path**
+**Where:** `sdk/src/ika.ts::requestSign` real-mode now plugs back into a
+finalised, broadcastable PSBT via `sdk/src/btc.ts::attachExternalEcdsaSig`.
 
-**Reality:** Real Ika dWallets are 2PC-MPC shares — neither user nor
-network can sign alone. DKG is an interactive multi-round MPC ceremony
-requiring gRPC contact with the Ika network at
-`pre-alpha-dev-1.ika.ika-network.net:443`.
+**Closure (2026-05-07):** The signing surface is end-to-end:
+1. The keeper builds a P2WPKH PSBT against the seller's dWallet.
+2. `sdk/src/btc.ts::bip143SighashForP2WPKH` extracts the BIP-143 segwit-v0
+   sighash for input 0 (32 bytes).
+3. The SDK calls `client.requestPresign` → `client.requestSign` against the
+   pre-alpha Ika gRPC at `pre-alpha-dev-1.ika.ika-network.net:443` with
+   the sighash as `message`. Network returns a 64-byte `(r || s)` ECDSA
+   signature on Secp256k1.
+4. `attachExternalEcdsaSig` normalises to low-s (BIP-62), DER-encodes,
+   appends `SIGHASH_ALL`, and **verifies the sig against the dWallet
+   pubkey + sighash before attaching**. Mismatch (e.g. unexpected
+   network-side hash_scheme) throws explicitly rather than emitting a
+   broken tx.
+5. `finalizePsbt` extracts the broadcast-ready hex.
+6. `sdk/src/btc.ts::broadcastTx` POSTs to `mempool.space/<network>/api/tx`
+   and returns the real signet txid.
 
-**Why deviate now:** local mock keeps tests offline + deterministic. The
-single-key shortcut is semantically equivalent for "the program emits a
-signed BTC tx" demos.
+The unit test at `sdk/tests/btc.test.ts::"external-sig path produces the
+same finalised tx as single-key signAndFinalize"` proves byte-equivalence
+with the bitcoinjs-lib internal flow.
 
-**Closure plan (P9+):** real-mode `createDWallet` calls Ika gRPC
-`SubmitTransaction(DkgFirstRound)`, polls for the resulting DWallet PDA,
-and returns the derived BTC P2WPKH address.
+**Auto-fallback:** If the pre-alpha network is unreachable or the sig
+fails verification, `tryReal` (sdk/src/mode.ts) falls back to the mock
+single-key path so the demo keeps running. Each call logs which path
+produced the value.
 
-### I2. Mock dWallet store is process-local and in-memory
-**Where:** `sdk/src/ika.ts` `mockStore: Map<string, MockEntry>`.
+**Residual:** authorisation. The current flow uses the keeper's keypair
+to authenticate to Ika, not the seller's. Production needs an on-chain
+`MessageApproval` (Solana ix) that the seller pre-authorises and the
+keeper presents to Ika at sign time. Tracked as **gap I4**.
 
-**Reality:** the Ika network is the source of truth for dWallets in
-production. The mock substitutes it with a per-process `Map` so tests
-that create + sign in one process work, but the deposit page in the
-Next.js dev server can't share state with a separately-spawned keeper.
+### I4. On-chain MessageApproval for keeper-side signing
+**Where:** `programs/obsidian-core/src/lib.rs` lacks an `approve_btc_message`
+ix that the seller signs at order placement, and a `present_approval` ix
+that the keeper calls at settle time.
 
-**Why deviate now:** simplifies the e2e test to a single mocha process.
-Deposit-page → keeper handoff is not on the P4 acceptance set.
+**Reality:** Per `docs/vendor/ika-pre-alpha.md` line 27, the Ika network
+gates Sign requests on a Solana-side `MessageApproval` for
+`(dwallet_id, message_digest, hash_scheme, signature_algorithm)`. The
+current ObsidianDesk demo passes the keeper's identity to Ika instead
+of the seller's, which works when `creator == keeper_pubkey` (centralised
+demo dwallet) but breaks the zero-trust custody model.
 
-**Closure plan (P8 / P9):** persist mock keys to `~/.obsidian-mock-keys.json`
-(file-locked) so multiple processes can read them. Production Ika lookup
-is on-chain — no shared file needed.
+**Why deviate now:** I4 closure requires the on-chain Ika program to
+expose a stable `MessageApproval` API; the pre-alpha SDK doesn't yet
+ship a wallet-driven `MessageApproval` ix in obsidian-core's controllable
+surface. Demo runs in `auto` mode and falls back gracefully when real
+auth fails.
+
+**Closure plan (next):** Add `approve_btc_settlement` (seller-signed,
+PDA-stored, references match_id + dwallet_id + max_amount), and
+`present_approval` (keeper-signed, reads PDA, builds the MessageApproval
+payload Ika expects). Wire from /trade order-placement so each sealed
+order pre-authorises its potential fills.
+
+### I2. ~~Mock dWallet store is process-local and in-memory~~ — **CLOSED**
+**Where:** `sdk/src/mock-store.ts::MockStore` (file-backed, atomic writes).
+
+**Closure (2026-05-07):** The dWallet store now persists to a JSON file at
+`~/.obsidian-mock-keys.json` (overridable via `OBSIDIAN_MOCK_STORE_PATH`).
+Atomic temp-file + rename writes survive concurrent writers. BigInt and
+`Uint8Array` round-trip via tagged objects. File permissions are 0600
+(owner read/write only).
+
+In docker compose, the `app` and `keeper` services share the path via a
+named volume `obsidian-keys` mounted at `/var/obsidian/keys/mock-keys.json`,
+so a dWallet created from the deposit page is visible to the keeper at
+settle time.
+
+8 unit tests cover the round-trip, concurrent writes, permissions, and
+the cross-process visibility property.
 
 ### I3. `finalize_settlement` accepts any signer (no keeper authority)
 **Where:** `programs/obsidian-core/src/lib.rs::FinalizeSettlement`.

@@ -30,16 +30,19 @@ export interface SafetyEnv {
 
 export function assertNotMockOnMainnet(env: SafetyEnv): void {
   const onMainnet = isMainnetEndpoint(env.network) || isMainnetEndpoint(env.rpc);
-  const mockEncrypt = env.encryptMode === 'mock' || env.encryptMode === undefined;
-  const mockIka = env.ikaMode === 'mock' || env.ikaMode === undefined;
-  if (onMainnet && (mockEncrypt || mockIka)) {
+  // `auto` can fall back to mock at any time — must be treated as risky on
+  // mainnet, same as explicit `mock`. Only the strict `real` value clears
+  // the guard.
+  const isRiskyMode = (m: string | undefined): boolean =>
+    m !== 'real';
+  if (onMainnet && (isRiskyMode(env.encryptMode) || isRiskyMode(env.ikaMode))) {
     throw new Error(
       [
         'ObsidianDesk safety guard: refusing to run with',
-        `OBSIDIAN_ENCRYPT_MODE=${env.encryptMode ?? 'mock(default)'}`,
-        `+ OBSIDIAN_IKA_MODE=${env.ikaMode ?? 'mock(default)'}`,
+        `OBSIDIAN_ENCRYPT_MODE=${env.encryptMode ?? 'auto(default)'}`,
+        `+ OBSIDIAN_IKA_MODE=${env.ikaMode ?? 'auto(default)'}`,
         `against a mainnet endpoint (${env.rpc ?? env.network ?? '?'}).`,
-        'Either point at devnet/testnet/signet or set both modes to "real".',
+        'Both modes must be "real" on mainnet — "auto" can fall back to mock and expose plaintext.',
       ].join(' '),
     );
   }

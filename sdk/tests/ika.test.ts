@@ -1,5 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, describe, it } from 'node:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   _mockAddressOf,
   _mockReset,
@@ -8,12 +11,22 @@ import {
   currentMode,
   lockPolicy,
   requestSign,
+  setStoreForTesting,
 } from '../src/ika.ts';
+import { MockStore } from '../src/mock-store.ts';
 import { address as btcAddress } from 'bitcoinjs-lib';
 import { buildSpendTx, networkFor } from '../src/btc.ts';
 import { VendorSDKUnavailableError } from '../src/errors.ts';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../src/slots.ts';
 import { DEFAULT_OBSIDIAN_PROGRAM_ID } from '../src/program-id.ts';
+
+// Point all ika tests at a temp store file so they never clobber the user's
+// real ~/.obsidian-mock-keys.json. Each test resets the file via _mockReset().
+const TEMP_STORE_PATH = path.join(
+  fs.mkdtempSync(path.join(os.tmpdir(), 'obsidian-ika-test-')),
+  'mock-keys.json',
+);
+setStoreForTesting(new MockStore(TEMP_STORE_PATH));
 
 function realScriptFor(addr: string): string {
   // bitcoinjs-lib v7 returns Uint8Array; wrap in Buffer for hex serialization.
