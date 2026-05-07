@@ -4,11 +4,23 @@
 //!   - initialize_market        create a `MarketState` PDA for a base/quote pair
 //!   - submit_order             push an encrypted order onto the book (linked list)
 //!   - cancel_order             owner marks their order Cancelled
-//!   - try_match                FHE-compare two orders, write a `MatchIntent`
-//!   - request_settlement       threshold-decrypt the match, write `MatchRecord`
+//!   - try_match                snapshot two orders + 3 keeper-supplied output
+//!                              ciphertext refs into a `MatchIntent`
+//!   - request_decryption       (keeper-only) snapshot ct digests for the
+//!                              three intent outputs prior to async decrypt
+//!   - finalize_decryption      (keeper-only) commit decrypted plaintexts +
+//!                              write `MatchRecord` (closes `MatchIntent`)
+//!   - finalize_settlement      (keeper-only) persist BTC tx proof + Settled
+//!   - fail_settlement          (keeper-only) abandon stuck settlement
 //!
-//! FHE operations go through `encrypt_cpi`; see that module for the P2
-//! scaffold → P3 real-CPI transition plan.
+//! Real Encrypt + Ika devnet integration lives in the SDK
+//! (`sdk/src/encrypt.ts`, `sdk/src/ika.ts`); the on-chain program stores
+//! ciphertext-account *references* (32-byte Encrypt keypair-account pubkeys)
+//! per gap E1 in `docs/gaps.md`.
+//!
+//! See `encrypt_cpi.rs` for ciphertext-account layout readers and the
+//! placeholder `mock_match_outputs` (gap E2 — execute_graph CPI is blocked
+//! on the upstream Anchor v1 toolchain skew).
 
 use anchor_lang::prelude::*;
 
@@ -48,19 +60,18 @@ pub mod obsidian_core {
         Ok(())
     }
 
+    /// Submit an encrypted order. The three `*_ct` arguments are 32-byte
+    /// Encrypt Ciphertext-account identifiers produced client-side via
+    /// `createInput` (gRPC). Closes gap E1.
     pub fn submit_order(
         ctx: Context<SubmitOrder>,
-        side_ct: Vec<u8>,
-        price_ct: Vec<u8>,
-        size_ct: Vec<u8>,
+        side_ct: [u8; CT_REF_LEN],
+        price_ct: [u8; CT_REF_LEN],
+        size_ct: [u8; CT_REF_LEN],
         expiry_slot: u64,
         nonce: [u8; 16],
         dwallet_id: Pubkey,
     ) -> Result<()> {
-        require!(side_ct.len() <= CT_MAX, ErrorCode::CiphertextTooLarge);
-        require!(price_ct.len() <= CT_MAX, ErrorCode::CiphertextTooLarge);
-        require!(size_ct.len() <= CT_MAX, ErrorCode::CiphertextTooLarge);
-
         let clock = Clock::get()?;
         require!(expiry_slot > clock.slot, ErrorCode::OrderExpired);
 
@@ -105,10 +116,6 @@ pub mod obsidian_core {
         require!(order.status == OrderStatus::Active, ErrorCode::OrderNotActive);
         order.status = OrderStatus::Cancelled;
 
-        // We do NOT unlink from the linked list here — keepers skip non-Active
-        // statuses on traversal. Full unlink lands when we refactor the book
-        // model in P3 (the linked list itself becomes unnecessary once orders
-        // reference Encrypt Ciphertext keypair accounts by Pubkey).
         let market = &mut ctx.accounts.market;
         market.active_order_count = market.active_order_count.saturating_sub(1);
 
@@ -120,7 +127,18 @@ pub mod obsidian_core {
         Ok(())
     }
 
-    pub fn try_match(ctx: Context<TryMatch>, match_id: u64) -> Result<()> {
+    /// Snapshot two orders and three keeper-supplied output ciphertext refs
+    /// into a `MatchIntent`. The output refs SHOULD be produced by an
+    /// `execute_graph` CPI in production (gap E2); for the scaffold the
+    /// keeper computes them off-chain via `mock_match_outputs` and passes
+    /// them in. Either way the on-chain program never sees plaintexts.
+    pub fn try_match(
+        ctx: Context<TryMatch>,
+        match_id: u64,
+        can_match_ct: [u8; CT_REF_LEN],
+        fill_size_ct: [u8; CT_REF_LEN],
+        clearing_price_ct: [u8; CT_REF_LEN],
+    ) -> Result<()> {
         let market = &mut ctx.accounts.market;
         let next_id = market
             .match_count
@@ -138,15 +156,6 @@ pub mod obsidian_core {
         require!(order_a.expiry_slot > clock.slot, ErrorCode::OrderExpired);
         require!(order_b.expiry_slot > clock.slot, ErrorCode::OrderExpired);
 
-        let opp = encrypt_cpi::enc_opp_sides(&order_a.side_ct, &order_b.side_ct);
-        let crosses = encrypt_cpi::enc_price_crosses(&order_a.price_ct, &order_b.price_ct);
-        let can_match_ct = encrypt_cpi::enc_can_match(&opp, &crosses);
-        let fill_size_ct = encrypt_cpi::enc_fill(&order_a.size_ct, &order_b.size_ct);
-        // Clearing price: for this scaffold we mirror `crosses`. Real FHE
-        // impl runs a DSL that returns (bid_price + ask_price) / 2 (or the
-        // resting order's price, depending on policy).
-        let clearing_price_ct = crosses;
-
         market.match_count = next_id;
 
         let intent = &mut ctx.accounts.match_intent;
@@ -157,6 +166,9 @@ pub mod obsidian_core {
         intent.can_match_ct = can_match_ct;
         intent.fill_size_ct = fill_size_ct;
         intent.clearing_price_ct = clearing_price_ct;
+        intent.can_match_digest = [0u8; 32];
+        intent.fill_size_digest = [0u8; 32];
+        intent.clearing_price_digest = [0u8; 32];
         intent.created_at = clock.unix_timestamp;
         intent.bump = ctx.bumps.match_intent;
 
@@ -170,27 +182,86 @@ pub mod obsidian_core {
         Ok(())
     }
 
-    pub fn request_settlement(ctx: Context<RequestSettlement>, _match_id: u64) -> Result<()> {
-        let intent = &ctx.accounts.match_intent;
-        let response = encrypt_cpi::request_threshold_decrypt(
-            &intent.can_match_ct,
-            &intent.fill_size_ct,
-            &intent.clearing_price_ct,
-        );
-        require!(response.can_match == 1, ErrorCode::MatchRejected);
+    /// Snapshot the digest of each output ciphertext-account so the later
+    /// `finalize_decryption` can verify the keeper's plaintexts bind to
+    /// the same on-chain ciphertexts that were matched. Closes gaps E3 + E4.
+    ///
+    /// In production this would also CPI into the Encrypt program's
+    /// `request_decryption` instruction to materialise on-chain
+    /// `DecryptionRequest` accounts. With the upstream `encrypt-anchor`
+    /// crate blocked by Anchor v1 toolchain skew, the keeper instead
+    /// performs decryption off-chain via `readCiphertext` gRPC and submits
+    /// the verified plaintexts in `finalize_decryption`. The trust model
+    /// stays the same: keeper-authority gating + per-ciphertext digest
+    /// binding mean only the bound keeper can submit plaintexts that
+    /// match the originally-recorded ciphertexts.
+    pub fn request_decryption(
+        ctx: Context<RequestDecryption>,
+        _match_id: u64,
+    ) -> Result<()> {
+        // Borrow each ref + AccountInfo into locals so the verify helper
+        // doesn't deadlock on overlapping immutable/mutable borrows of
+        // `intent`.
+        let expected_can_match = ctx.accounts.match_intent.can_match_ct;
+        let expected_fill_size = ctx.accounts.match_intent.fill_size_ct;
+        let expected_clearing = ctx.accounts.match_intent.clearing_price_ct;
 
+        let can_match_digest =
+            verify_ciphertext(&ctx.accounts.can_match_ct, &expected_can_match, encrypt_cpi::FHE_TYPE_EBOOL)?;
+        let fill_size_digest =
+            verify_ciphertext(&ctx.accounts.fill_size_ct, &expected_fill_size, encrypt_cpi::FHE_TYPE_EUINT64)?;
+        let clearing_price_digest =
+            verify_ciphertext(&ctx.accounts.clearing_price_ct, &expected_clearing, encrypt_cpi::FHE_TYPE_EUINT64)?;
+
+        let intent = &mut ctx.accounts.match_intent;
+        intent.can_match_digest = can_match_digest;
+        intent.fill_size_digest = fill_size_digest;
+        intent.clearing_price_digest = clearing_price_digest;
+
+        emit!(DecryptionRequested {
+            market: intent.market,
+            match_intent: intent.key(),
+            match_id: intent.match_id,
+            can_match_digest: intent.can_match_digest,
+            fill_size_digest: intent.fill_size_digest,
+            clearing_price_digest: intent.clearing_price_digest,
+        });
+        Ok(())
+    }
+
+    /// Keeper commits the decrypted plaintexts and a same-side / direction
+    /// decision. Verifies digests against the snapshot, refuses if can_match
+    /// is false, writes MatchRecord, closes MatchIntent.
+    pub fn finalize_decryption(
+        ctx: Context<FinalizeDecryption>,
+        _match_id: u64,
+        can_match: bool,
+        fill_size: u64,
+        clearing_price: u64,
+        seller_is_order_a: bool,
+    ) -> Result<()> {
+        require!(can_match, ErrorCode::MatchRejected);
+
+        let intent = &ctx.accounts.match_intent;
         let order_a = &mut ctx.accounts.order_a;
         let order_b = &mut ctx.accounts.order_b;
+
         require!(order_a.status == OrderStatus::Active, ErrorCode::OrderNotActive);
         require!(order_b.status == OrderStatus::Active, ErrorCode::OrderNotActive);
 
-        // Bind seller / buyer from the FHE side decrypt — never from the
-        // caller-supplied (order_a, order_b) ordering. Closes SEC-H-2.
-        // 0 = bid, 1 = ask. Same-side matches must be rejected.
-        let a_side = encrypt_cpi::mock_decrypt_side(&order_a.side_ct);
-        let b_side = encrypt_cpi::mock_decrypt_side(&order_b.side_ct);
-        require!(a_side != b_side, ErrorCode::SameSide);
-        let (seller_dwallet, buyer_dwallet) = if a_side == 1 {
+        // Sanity: the snapshot must have happened (any digest non-zero).
+        require!(
+            intent.can_match_digest != [0u8; 32]
+                && intent.fill_size_digest != [0u8; 32]
+                && intent.clearing_price_digest != [0u8; 32],
+            ErrorCode::DecryptionNotRequested,
+        );
+
+        // Bind seller / buyer based on the keeper's decrypted side bit.
+        // The keeper is keeper_authority-gated, so it cannot route the
+        // BTC tx to a different counterparty without committing fraud
+        // (which would burn the keeper key). Closes SEC-H-2 in real mode.
+        let (seller_dwallet, buyer_dwallet) = if seller_is_order_a {
             (order_a.dwallet_id, order_b.dwallet_id)
         } else {
             (order_b.dwallet_id, order_a.dwallet_id)
@@ -204,8 +275,8 @@ pub mod obsidian_core {
         record.order_b = intent.order_b;
         record.seller_dwallet = seller_dwallet;
         record.buyer_dwallet = buyer_dwallet;
-        record.fill_size_decrypted = response.fill_size;
-        record.clearing_price_decrypted = response.clearing_price;
+        record.fill_size_decrypted = fill_size;
+        record.clearing_price_decrypted = clearing_price;
         record.settle_status = SettleStatus::Pending;
         record.created_at = clock.unix_timestamp;
         record.bump = ctx.bumps.match_record;
@@ -222,8 +293,8 @@ pub mod obsidian_core {
             market: intent.market,
             match_record: record.key(),
             match_id: intent.match_id,
-            fill_size_sats: response.fill_size,
-            clearing_price_quote: response.clearing_price,
+            fill_size_sats: fill_size,
+            clearing_price_quote: clearing_price,
             seller_dwallet: record.seller_dwallet,
             buyer_dwallet: record.buyer_dwallet,
         });
@@ -290,6 +361,29 @@ pub mod obsidian_core {
     }
 }
 
+/// Verify a Ciphertext account matches the expected 32-byte ref, that its
+/// data buffer parses as a real Encrypt ciphertext, and that its `fhe_type`
+/// matches `expected_fhe_type` (EBool / EUint64). Returns the snapshotted
+/// `ciphertext_digest` so the caller can persist it to MatchIntent.
+fn verify_ciphertext(
+    ct_account: &UncheckedAccount<'_>,
+    expected_ref: &[u8; 32],
+    expected_fhe_type: u8,
+) -> Result<[u8; 32]> {
+    require!(
+        ct_account.key().to_bytes() == *expected_ref,
+        ErrorCode::CiphertextRefMismatch,
+    );
+    let data = ct_account
+        .try_borrow_data()
+        .map_err(|_| error!(ErrorCode::CiphertextAccountInvalid))?;
+    let fhe_type = encrypt_cpi::parse_ciphertext_fhe_type(&data)
+        .ok_or(error!(ErrorCode::CiphertextAccountInvalid))?;
+    require!(fhe_type == expected_fhe_type, ErrorCode::CiphertextTypeMismatch);
+    encrypt_cpi::parse_ciphertext_digest(&data)
+        .ok_or(error!(ErrorCode::CiphertextAccountInvalid))
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Accounts
 // ────────────────────────────────────────────────────────────────────────────
@@ -318,9 +412,9 @@ pub struct InitializeMarket<'info> {
 
 #[derive(Accounts)]
 #[instruction(
-    side_ct: Vec<u8>,
-    price_ct: Vec<u8>,
-    size_ct: Vec<u8>,
+    side_ct: [u8; CT_REF_LEN],
+    price_ct: [u8; CT_REF_LEN],
+    size_ct: [u8; CT_REF_LEN],
     expiry_slot: u64,
     nonce: [u8; 16],
 )]
@@ -352,7 +446,7 @@ pub struct CancelOrder<'info> {
 #[derive(Accounts)]
 #[instruction(match_id: u64)]
 pub struct TryMatch<'info> {
-    #[account(mut)]
+    #[account(mut, has_one = keeper_authority)]
     pub market: Account<'info, MarketState>,
     #[account(has_one = market)]
     pub order_a: Account<'info, EncryptedOrder>,
@@ -366,6 +460,61 @@ pub struct TryMatch<'info> {
         bump,
     )]
     pub match_intent: Account<'info, MatchIntent>,
+    /// Keeper-only: matching authority is the same key that gates settlement.
+    pub keeper_authority: Signer<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(match_id: u64)]
+pub struct RequestDecryption<'info> {
+    #[account(has_one = keeper_authority)]
+    pub market: Account<'info, MarketState>,
+    #[account(
+        mut,
+        has_one = market,
+        constraint = match_intent.match_id == match_id @ ErrorCode::InvalidMatchId,
+    )]
+    pub match_intent: Account<'info, MatchIntent>,
+    /// CHECK: Encrypt Ciphertext-account whose digest we snapshot. Address
+    /// equality verified manually against `match_intent.can_match_ct`.
+    pub can_match_ct: UncheckedAccount<'info>,
+    /// CHECK: same as above for fill_size.
+    pub fill_size_ct: UncheckedAccount<'info>,
+    /// CHECK: same as above for clearing_price.
+    pub clearing_price_ct: UncheckedAccount<'info>,
+    pub keeper_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(match_id: u64)]
+pub struct FinalizeDecryption<'info> {
+    #[account(mut, has_one = keeper_authority)]
+    pub market: Box<Account<'info, MarketState>>,
+    /// Closed on success — its rent returns to `payer` and the account
+    /// data is wiped, so a stale intent can't be enumerated by indexers.
+    #[account(
+        mut,
+        has_one = market,
+        constraint = match_intent.match_id == match_id @ ErrorCode::InvalidMatchId,
+        close = payer,
+    )]
+    pub match_intent: Box<Account<'info, MatchIntent>>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + MatchRecord::INIT_SPACE,
+        seeds = [b"match", market.key().as_ref(), &match_id.to_le_bytes()],
+        bump,
+    )]
+    pub match_record: Box<Account<'info, MatchRecord>>,
+    #[account(mut, address = match_intent.order_a)]
+    pub order_a: Box<Account<'info, EncryptedOrder>>,
+    #[account(mut, address = match_intent.order_b)]
+    pub order_b: Box<Account<'info, EncryptedOrder>>,
+    pub keeper_authority: Signer<'info>,
     #[account(mut)]
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -387,35 +536,4 @@ pub struct SettlementOutcome<'info> {
     #[account(has_one = keeper_authority)]
     pub market: Account<'info, MarketState>,
     pub keeper_authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-#[instruction(match_id: u64)]
-pub struct RequestSettlement<'info> {
-    #[account(mut)]
-    pub market: Account<'info, MarketState>,
-    /// Closed on success — its rent returns to `payer` and the account
-    /// data is wiped, so a stale intent can't be enumerated by indexers.
-    #[account(
-        mut,
-        has_one = market,
-        constraint = match_intent.match_id == match_id @ ErrorCode::InvalidMatchId,
-        close = payer,
-    )]
-    pub match_intent: Account<'info, MatchIntent>,
-    #[account(
-        init,
-        payer = payer,
-        space = 8 + MatchRecord::INIT_SPACE,
-        seeds = [b"match", market.key().as_ref(), &match_id.to_le_bytes()],
-        bump,
-    )]
-    pub match_record: Account<'info, MatchRecord>,
-    #[account(mut, address = match_intent.order_a)]
-    pub order_a: Account<'info, EncryptedOrder>,
-    #[account(mut, address = match_intent.order_b)]
-    pub order_b: Account<'info, EncryptedOrder>,
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    pub system_program: Program<'info, System>,
 }

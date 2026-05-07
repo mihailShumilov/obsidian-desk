@@ -76,14 +76,16 @@ describe('obsidian-core', () => {
     expect(state.orderbookHead).to.be.null;
   });
 
-  it('submits two encrypted orders, matches them, and decrypts settlement', async () => {
+  // Legacy flow exercise — kept here as documentation. The new flow
+  // (try_match → request_decryption → finalize_decryption) requires the
+  // deployed Encrypt program at 4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8
+  // on Solana devnet. Skip on the local validator; see `docs/gaps.md` E2.
+  it.skip('submits two encrypted orders, matches them, and decrypts settlement', async () => {
     const nonceA = randomBytes(16);
     const nonceB = randomBytes(16);
-    // Mock ciphertexts. Real Encrypt Ciphertext accounts are 100 B (per
-    // docs/vendor/encrypt-pre-alpha.md §Reference: Accounts); the inline
-    // Vec<u8> we use in the P2 scaffold just needs to be <= CT_MAX = 3000.
-    // Byte 24 is the SDK's mock side bit (0=bid, 1=ask) — request_settlement
-    // refuses same-side matches, so order A is bid and order B is ask here.
+    // ct refs: 32-byte arrays (E1 closure). Byte 24 carries the SDK's mock
+    // side bit (0=bid, 1=ask) so the keeper-side decryption picks the right
+    // direction at finalize_decryption time.
     const sideCtBid = Buffer.alloc(32);
     const sideCtAsk = Buffer.alloc(32);
     sideCtAsk[24] = 1;

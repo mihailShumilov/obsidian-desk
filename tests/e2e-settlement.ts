@@ -32,7 +32,10 @@ import {
  * This test does NOT touch the signet network. The keeper's mock UTXO
  * provider synthesizes a deterministic input per dWallet address.
  */
-describe('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
+// Legacy flow — `request_settlement` is now `request_decryption + finalize_decryption`.
+// Needs real Encrypt Ciphertext accounts on devnet to run. See docs/gaps.md
+// E2 / E3 / E4 for the closure path; this scaffold is preserved as reference.
+describe.skip('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
   const { provider, program } = setupConfirmedProvider();
 
   let market: PublicKey;

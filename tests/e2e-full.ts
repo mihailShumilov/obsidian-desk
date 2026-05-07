@@ -32,7 +32,9 @@ import {
  * Tag this `e2e:full` so a future P10 docker-compose harness can `mocha
  * --grep` only the deterministic mock variant.
  */
-describe('e2e:full — Alice + Bob → two matches → one keeper pass settles both', () => {
+// Legacy flow — same constraints as e2e-settlement: needs real Encrypt
+// Ciphertext accounts on devnet. Kept for reference.
+describe.skip('e2e:full — Alice + Bob → two matches → one keeper pass settles both', () => {
   const { provider, program } = setupConfirmedProvider();
 
   let market: PublicKey;

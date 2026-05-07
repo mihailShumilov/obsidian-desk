@@ -1,22 +1,5 @@
 use anchor_lang::prelude::*;
 
-/// Per-ciphertext cap for `EncryptedOrder` fields. Real Encrypt FHE blobs
-/// are typically a few hundred bytes; 3000 is the upper bound documented
-/// in `docs/vendor/encrypt-pre-alpha.md` and stays under Solana's 10 240-byte
-/// CPI realloc cap (`MAX_PERMITTED_DATA_INCREASE`) at 3 × 3000.
-///
-/// Once P3 swaps inline blobs for 32-byte Pubkey references to Encrypt
-/// Ciphertext keypair accounts (gap E1 in `docs/gaps.md`), this cap becomes
-/// irrelevant.
-pub const CT_MAX: usize = 3000;
-
-/// Tighter cap for `MatchIntent` ciphertext fields, where the program
-/// currently stores 100-byte placeholder blobs from `encrypt_cpi.rs` until
-/// gap E1 lands. Sizing the account at 3 × CT_MAX (9 KB) was forcing every
-/// `try_match` to rent the worst-case slab. 256 bytes covers the placeholders
-/// with margin and drops per-intent rent ~12×.
-pub const MATCH_INTENT_CT_MAX: usize = 256;
-
 /// Singleton ciphertext slot in `MarketState`. No realloc-cap pressure here
 /// because it's the only large field in the struct, so the prompt's 4096 fits.
 pub const TOTAL_VOLUME_CT_MAX: usize = 4096;
@@ -28,6 +11,10 @@ pub const BTC_TX_PROOF_MAX: usize = 1024;
 
 /// Orderbook depth ceiling for the hackathon MVP (ARCHITECTURE.md §8).
 pub const MAX_ACTIVE_ORDERS: u8 = 16;
+
+/// Length of an Encrypt Ciphertext keypair-account pubkey, used as the
+/// on-wire identifier per `docs/vendor/encrypt-pre-alpha.md` §Reference: Accounts.
+pub const CT_REF_LEN: usize = 32;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
 pub enum OrderStatus {
@@ -71,18 +58,22 @@ pub struct MarketState {
     pub total_volume_cipher: Vec<u8>,
 }
 
+/// Encrypted limit order. The three ciphertext fields hold **Encrypt
+/// Ciphertext keypair-account identifiers** (32-byte pubkeys), not inline
+/// blobs. See `docs/vendor/encrypt-pre-alpha.md` §Reference: Accounts and
+/// `docs/gaps.md` E1 closure note.
 #[account]
 #[derive(InitSpace)]
 pub struct EncryptedOrder {
     pub market: Pubkey,
     pub owner: Pubkey,
     pub dwallet_id: Pubkey,
-    #[max_len(CT_MAX)]
-    pub side_ct: Vec<u8>,
-    #[max_len(CT_MAX)]
-    pub price_ct: Vec<u8>,
-    #[max_len(CT_MAX)]
-    pub size_ct: Vec<u8>,
+    /// Encrypt Ciphertext-account pubkey (FHE EBool: bid=0, ask=1).
+    pub side_ct: [u8; CT_REF_LEN],
+    /// Encrypt Ciphertext-account pubkey (FHE EUint64: price in quote units).
+    pub price_ct: [u8; CT_REF_LEN],
+    /// Encrypt Ciphertext-account pubkey (FHE EUint64: size in base units).
+    pub size_ct: [u8; CT_REF_LEN],
     pub expiry_slot: u64,
     pub nonce: [u8; 16],
     pub next: Option<Pubkey>,
@@ -90,9 +81,10 @@ pub struct EncryptedOrder {
     pub bump: u8,
 }
 
-/// Intermediate FHE artifact produced by `try_match`. Holds the ciphertexts
-/// for `can_match`, `fill_size`, `clearing_price` until `request_settlement`
-/// asks the Encrypt network to threshold-decrypt them.
+/// Intermediate FHE artifact produced by `try_match`. Stores the three
+/// ciphertext-account pubkeys for the FHE comparator outputs (can_match,
+/// fill_size, clearing_price) plus their digests so the matching outputs
+/// can be cryptographically bound to a later async decryption.
 #[account]
 #[derive(InitSpace)]
 pub struct MatchIntent {
@@ -100,12 +92,16 @@ pub struct MatchIntent {
     pub match_id: u64,
     pub order_a: Pubkey,
     pub order_b: Pubkey,
-    #[max_len(MATCH_INTENT_CT_MAX)]
-    pub can_match_ct: Vec<u8>,
-    #[max_len(MATCH_INTENT_CT_MAX)]
-    pub fill_size_ct: Vec<u8>,
-    #[max_len(MATCH_INTENT_CT_MAX)]
-    pub clearing_price_ct: Vec<u8>,
+    /// Output ciphertext-account pubkeys produced by the FHE comparator.
+    pub can_match_ct: [u8; CT_REF_LEN],
+    pub fill_size_ct: [u8; CT_REF_LEN],
+    pub clearing_price_ct: [u8; CT_REF_LEN],
+    /// Digests snapshotted at `request_decryption` time so `finalize_decryption`
+    /// can verify the decryption response binds to the same ciphertext that
+    /// was matched. Zero until request_decryption fires.
+    pub can_match_digest: [u8; 32],
+    pub fill_size_digest: [u8; 32],
+    pub clearing_price_digest: [u8; 32],
     pub created_at: i64,
     pub bump: u8,
 }

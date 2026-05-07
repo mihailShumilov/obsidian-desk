@@ -28,6 +28,20 @@ pub struct MatchProposed {
     pub order_b: Pubkey,
 }
 
+/// Emitted after `request_decryption` snapshots the three output ciphertext
+/// digests onto MatchIntent. The keeper reads it, calls `readCiphertext`
+/// gRPC for each, then submits `finalize_decryption` with the plaintexts.
+/// Closes gaps E3 + E4.
+#[event]
+pub struct DecryptionRequested {
+    pub market: Pubkey,
+    pub match_intent: Pubkey,
+    pub match_id: u64,
+    pub can_match_digest: [u8; 32],
+    pub fill_size_digest: [u8; 32],
+    pub clearing_price_digest: [u8; 32],
+}
+
 /// Emitted after decryption confirms a match. The Ika keeper picks this up
 /// and initiates the cross-chain dWallet signing flow.
 #[event]

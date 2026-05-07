@@ -176,10 +176,13 @@ async function main(): Promise<void> {
 
     try {
       const methods = program.methods as LooseProgramMethods;
+      // submit_order now takes 32-byte ct refs as fixed-length arrays
+      // (gap E1 closure). The blob fields are 32B Encrypt-Ciphertext-account
+      // identifiers in real mode, or 32B mock-encoded blobs in mock mode.
       await methods['submitOrder']!(
-        Buffer.from(blob.side_ct),
-        Buffer.from(blob.price_ct),
-        Buffer.from(blob.size_ct),
+        [...blob.side_ct],
+        [...blob.price_ct],
+        [...blob.size_ct],
         expirySlot,
         [...blob.nonce],
         dwPk,

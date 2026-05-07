@@ -1,117 +1,127 @@
-//! Encrypt-network CPI adapter — **P2 scaffold**.
+//! Encrypt-network on-chain integration.
 //!
-//! The real Encrypt API (per docs/vendor/encrypt-pre-alpha.md) has a very
-//! different shape than the `enc_xor / enc_gte / enc_min` primitives sketched
-//! in docs/ARCHITECTURE.md §5.2:
+//! Closes gaps E3 (async decrypt) and E4 (one DecryptionRequest per ciphertext)
+//! from `docs/gaps.md`. Gap E1 (ciphertext-account references) is closed in
+//! `state.rs` — the program now stores 32-byte ciphertext identifiers instead
+//! of inline `Vec<u8>` blobs.
 //!
-//!   - Ciphertexts are 100-byte keypair accounts owned by the Encrypt program;
-//!     the account pubkey IS the ciphertext identifier (doc §Reference: Accounts).
-//!   - All FHE ops go through a single `execute_graph` CPI, with graphs
-//!     produced by compiling `#[encrypt_fn]` Rust DSL (doc §execute_graph,
-//!     §CPI framework).
-//!   - Decryption is async: `request_decryption(request_acct, ciphertext)`
-//!     returns a digest; an off-chain decryptor responds later; the program
-//!     later reads the result via `read_decrypted_verified`
-//!     (doc §Decryption flow).
-//!
-//! docs/PROMPTS.md P2 explicitly asks for `Vec<u8>` ciphertext fields stored
-//! inline in `EncryptedOrder`, plus the named wrappers below. To honor both:
-//!
-//!   - This module preserves the API SHAPE the prompt describes.
-//!   - Bodies are deterministic placeholders so the program and its tests
-//!     run end-to-end without the Encrypt program actually being deployed.
-//!   - P3 replaces the bodies with real CPI calls and refactors
-//!     `EncryptedOrder` to reference Encrypt keypair-account ciphertexts
-//!     by Pubkey.
-//!
-//! See `docs/gaps.md` for the full list of vendor-SDK adaptations.
+//! What's NOT yet closed: gap E2 (real `execute_graph` CPI for FHE matching).
+//! That requires the upstream `encrypt-anchor` crate, which targets
+//! `anchor-lang = 1` + `edition = 2024` while ObsidianDesk is on
+//! `anchor-lang = 0.32.1` + `edition = 2021`. The mock match path below
+//! produces deterministic output ciphertext identifiers so the rest of the
+//! flow works against real on-chain Encrypt accounts produced by the
+//! gRPC `createInput` path.
 
-use crate::state::CT_MAX;
+use anchor_lang::prelude::*;
 
-/// Fixed-length placeholder ciphertext. 100 bytes = real Ciphertext account
-/// size per Encrypt's Reference: Accounts §Ciphertext (disc 6).
-const PLACEHOLDER_CT_LEN: usize = 100;
+/// Encrypt program id on Solana devnet
+/// (per `docs/vendor/encrypt-pre-alpha.md` §Pre-Alpha Environment).
+pub const ENCRYPT_PROGRAM_ID: Pubkey =
+    pubkey!("4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8");
 
-fn placeholder_ct() -> Vec<u8> {
-    vec![0u8; PLACEHOLDER_CT_LEN]
-}
+/// CPI authority PDA seed used by Encrypt's CPI framework.
+/// Mirrors `encrypt_anchor::CPI_AUTHORITY_SEED` from
+/// `chains/solana/program-sdk/anchor/src/lib.rs`.
+pub const CPI_AUTHORITY_SEED: &[u8] = b"__encrypt_cpi_authority";
 
-fn check_len(ct: &[u8]) -> bool {
-    ct.len() <= CT_MAX
-}
+/// Encrypt program instruction discriminators (per
+/// `chains/solana/program-sdk/anchor/src/lib.rs`).
+pub const IX_REQUEST_DECRYPTION: u8 = 11;
+pub const IX_CLOSE_DECRYPTION_REQUEST: u8 = 13;
 
-/// FHE: are the two side ciphertexts opposite (one bid, one ask)?
-/// Real impl: `execute_graph` of a 1-bit XOR DSL function.
-pub fn enc_opp_sides(a_side_ct: &[u8], b_side_ct: &[u8]) -> Vec<u8> {
-    debug_assert!(check_len(a_side_ct) && check_len(b_side_ct));
-    placeholder_ct()
-}
+// ── Ciphertext-account layout offsets ──
+//
+// Vendored from `encrypt-pre-alpha`/chains/solana/program-sdk/types/src/accounts.rs
+// to avoid pulling the full `encrypt-types` workspace (which targets
+// edition 2024 / anchor-lang 1) into this 0.32 program.
+//
+// Ciphertext account layout (after 2-byte disc+ver prefix):
+//   ciphertext_digest(32) authorized(32) network_encryption_public_key(32)
+//   fhe_type(1) status(1)
+pub const CT_CIPHERTEXT_DIGEST: usize = 2;
+pub const CT_FHE_TYPE: usize = 98; // 2 + 32 + 32 + 32
+pub const CT_LEN: usize = 100; // 2 + 98
 
-/// FHE: does `bid_price >= ask_price`?
-/// Real impl: `execute_graph` of an EUint64 `>=` DSL function.
-pub fn enc_price_crosses(a_price_ct: &[u8], b_price_ct: &[u8]) -> Vec<u8> {
-    debug_assert!(check_len(a_price_ct) && check_len(b_price_ct));
-    placeholder_ct()
-}
+// DecryptionRequest header layout (after 2-byte disc+ver prefix):
+//   ciphertext(32) ciphertext_digest(32) requester(32)
+//   fhe_type(1) total_len(4) bytes_written(4)
+pub const DR_CIPHERTEXT_DIGEST: usize = 34; // 2 + 32
+pub const DR_FHE_TYPE: usize = 98;
+pub const DR_TOTAL_LEN: usize = 99;
+pub const DR_BYTES_WRITTEN: usize = 103;
+pub const DR_HEADER_END: usize = 107; // 2 + 105
 
-/// FHE: `min(a_size, b_size)`.
-/// Real impl: `execute_graph` of `.min()` on EUint64 (doc §FHE Operations).
-pub fn enc_fill(a_size_ct: &[u8], b_size_ct: &[u8]) -> Vec<u8> {
-    debug_assert!(check_len(a_size_ct) && check_len(b_size_ct));
-    placeholder_ct()
-}
-
-/// Composed `can_match`: `opp_sides AND price_crosses`. Real impl would be
-/// produced by a single DSL graph that chains the three comparisons.
-pub fn enc_can_match(opp_sides_ct: &[u8], price_crosses_ct: &[u8]) -> Vec<u8> {
-    debug_assert!(check_len(opp_sides_ct) && check_len(price_crosses_ct));
-    placeholder_ct()
-}
-
-/// Mock result of the async `request_decryption` → response → read flow.
-/// P3 wires the real pattern (see doc §Decryption flow).
-pub struct MockDecryptResponse {
-    /// 1 = FHE comparator said the orders match, 0 = rejected.
-    pub can_match: u64,
-    /// Decrypted fill size in satoshis.
-    pub fill_size: u64,
-    /// Decrypted clearing price in the market's quote units (USDC × 1e6).
-    pub clearing_price: u64,
-}
-
-/// P2 mock: always returns a successful decrypt so the test path proceeds.
-/// Deterministic values so tests are reproducible.
-pub fn request_threshold_decrypt(
-    can_match_ct: &[u8],
-    fill_size_ct: &[u8],
-    clearing_price_ct: &[u8],
-) -> MockDecryptResponse {
-    debug_assert!(check_len(can_match_ct));
-    debug_assert!(check_len(fill_size_ct));
-    debug_assert!(check_len(clearing_price_ct));
-    MockDecryptResponse {
-        can_match: 1,
-        // 0.1 BTC in satoshis = 10_000_000 (mock fill size for tests).
-        fill_size: 10_000_000,
-        // $69,750.00 USDC scaled by 1e6 (mock clearing price for tests).
-        clearing_price: 69_750_000_000,
+/// Read `ciphertext_digest` from a Ciphertext account's data buffer.
+/// Returns None if the buffer is too short to be a valid ciphertext.
+pub fn parse_ciphertext_digest(data: &[u8]) -> Option<[u8; 32]> {
+    if data.len() < CT_LEN {
+        return None;
     }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&data[CT_CIPHERTEXT_DIGEST..CT_CIPHERTEXT_DIGEST + 32]);
+    Some(out)
 }
 
-/// Mock side decrypt — the program needs a verified bid/ask bit per order
-/// so `request_settlement` can route the BTC tx the right direction
-/// (closes SEC-H-2). Real impl: two `request_decryption` calls on the
-/// `side_ct` ciphertext-account pubkeys.
-///
-/// In mock mode the SDK encodes the u64 plaintext into bytes [24..32] of
-/// the 32-byte ciphertext id (sdk/src/encrypt.ts mockEncrypt). Reading
-/// byte 24 recovers the bid (0) / ask (1) bit deterministically. Buffers
-/// shorter than 25 bytes default to bid so legacy fixtures still work,
-/// but production code paths always use the SDK-produced 32-byte form.
-pub fn mock_decrypt_side(side_ct: &[u8]) -> u64 {
-    debug_assert!(check_len(side_ct));
-    if side_ct.len() <= 24 {
-        return 0;
+/// Read the `fhe_type` byte from a Ciphertext account.
+pub fn parse_ciphertext_fhe_type(data: &[u8]) -> Option<u8> {
+    if data.len() < CT_LEN {
+        return None;
     }
-    side_ct[24] as u64
+    Some(data[CT_FHE_TYPE])
 }
+
+/// Returns the decrypted plaintext bytes if the DecryptionRequest is
+/// `Complete` AND its stored ciphertext_digest matches `expected_digest`
+/// (binding check — closes the digest-replay class of issues).
+pub fn read_decrypted_verified(
+    request_data: &[u8],
+    expected_digest: &[u8; 32],
+) -> Option<Vec<u8>> {
+    if request_data.len() < DR_HEADER_END {
+        return None;
+    }
+    // Verify the request's stored digest matches what we snapshotted.
+    let req_digest = &request_data[DR_CIPHERTEXT_DIGEST..DR_CIPHERTEXT_DIGEST + 32];
+    if req_digest != expected_digest {
+        return None;
+    }
+    let total = u32::from_le_bytes(
+        request_data[DR_TOTAL_LEN..DR_TOTAL_LEN + 4].try_into().ok()?,
+    );
+    let written = u32::from_le_bytes(
+        request_data[DR_BYTES_WRITTEN..DR_BYTES_WRITTEN + 4].try_into().ok()?,
+    );
+    if written < total || total == 0 {
+        return None;
+    }
+    let end = DR_HEADER_END + total as usize;
+    if request_data.len() < end {
+        return None;
+    }
+    Some(request_data[DR_HEADER_END..end].to_vec())
+}
+
+/// FHE type discriminator constants (per Encrypt vendor docs §FHE Types).
+pub const FHE_TYPE_EBOOL: u8 = 0;
+pub const FHE_TYPE_EUINT64: u8 = 4;
+
+/// Decode a u64 plaintext from a `Complete` DecryptionRequest payload.
+/// Encrypt encodes EUint64 as 8 bytes little-endian.
+pub fn decode_u64(plaintext: &[u8]) -> Option<u64> {
+    if plaintext.len() < 8 {
+        return None;
+    }
+    Some(u64::from_le_bytes(plaintext[..8].try_into().ok()?))
+}
+
+/// Decode a bool plaintext from a `Complete` DecryptionRequest payload.
+/// Encrypt encodes EBool as a single byte (0 = false, 1 = true).
+pub fn decode_bool(plaintext: &[u8]) -> Option<bool> {
+    plaintext.first().map(|b| *b != 0)
+}
+
+// Match-output ciphertext identifiers are produced off-chain by the keeper
+// via gRPC `createInput` (see `keeper/src/match-graph.ts`) and supplied to
+// `try_match` as instruction args. Real Encrypt would produce these via
+// `execute_graph` CPI from inside the program — that's gap E2.

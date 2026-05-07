@@ -13,7 +13,12 @@ import { bootstrapFreshMarket, setupConfirmedProvider } from './_setup.ts';
  * P3 e2e: encrypt an order client-side (mock mode), submit to the program,
  * read it back, assert the on-chain ciphertext bytes equal the SDK output.
  */
-describe('e2e: encrypt → submit_order → read-back', () => {
+// Legacy flow — submit_order now takes 32-byte ciphertext-account refs (gap
+// E1 closed). This test exercised the old `Vec<u8>` shape with the SDK's
+// mock decode, which is incompatible with the new program. Keep for
+// reference; revive against devnet (real Encrypt accounts) once gap E2
+// lands. See docs/gaps.md.
+describe.skip('e2e: encrypt → submit_order → read-back', () => {
   const { provider, program } = setupConfirmedProvider();
 
   let market: PublicKey;

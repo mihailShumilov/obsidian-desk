@@ -23,67 +23,49 @@ explicitly licenses overrides ("override from docs/vendor").
 **Closure plan (P3):** vanishes when E1 closes — Pubkey references are
 32 bytes each, so account size drops to a few hundred bytes total.
 
-### E1. Inline `Vec<u8>` ciphertexts vs. keypair-account references
-**Where:** `programs/obsidian-core/src/state.rs::EncryptedOrder` stores
-`side_ct`, `price_ct`, `size_ct` as `Vec<u8>` with `#[max_len(CT_MAX)]`.
+### E1. ~~Inline `Vec<u8>` ciphertexts vs. keypair-account references~~ — **CLOSED**
+`EncryptedOrder` and `MatchIntent` now store `side_ct: [u8; 32]`, etc. as
+Encrypt Ciphertext-account identifiers. Closed by the program rewrite at
+2026-05-07 (commit on this branch). The SDK's real-mode `encryptOrder` calls
+gRPC `createInput` and returns 3 fresh on-chain ciphertext-account
+identifiers; `submit_order` accepts those refs directly. `MatchIntent` also
+holds the 3 keeper-supplied output ct refs from `try_match`.
 
-**Reality:** Encrypt represents ciphertexts as 100-byte keypair accounts owned
-by the Encrypt program (`docs/vendor/encrypt-pre-alpha.md` §Reference: Accounts
-— Ciphertext (disc 6)). The pubkey IS the ciphertext identifier; the encrypted
-blob lives in a separate account, not inline in our state.
+### E2. `enc_xor / enc_gte / enc_min` primitives don't exist — **PARTIALLY CLOSED**
+**State (2026-05-07):** the four mock functions in `encrypt_cpi.rs` are gone.
+`try_match` now takes the three output ciphertext refs (`can_match_ct`,
+`fill_size_ct`, `clearing_price_ct`) as **instruction arguments**, computed
+off-chain by the keeper via gRPC `createInput`. The on-chain program never
+sees plaintext — it just records the refs and verifies digests at
+`request_decryption` time.
 
-**Why deviate now:** `docs/PROMPTS.md` P2 explicitly asks for inline `Vec<u8>`
-fields with `#[max_len(CT_MAX)]`. Following the prompt keeps the P2 acceptance
-criteria reachable without reaching forward into P3's CPI work.
+**What's left:** moving the FHE comparator from the keeper back on-chain
+via `execute_graph` CPI. That's the production trust model — the program
+should derive output ciphertexts itself from the input order ciphertexts,
+not trust the keeper to pick them. Closure requires:
+1. `#[encrypt_fn] match_orders(a_side, a_price, a_size, b_side, b_price, b_size) -> (EBool, EUint64, EUint64)` Rust DSL.
+2. The `encrypt-anchor` crate from `dwallet-labs/encrypt-pre-alpha` wired into Cargo.toml.
+3. **Blocker**: upstream `encrypt-anchor` requires `anchor-lang = 1` + `edition = 2024` + Rust 1.94, while ObsidianDesk is on `anchor-lang = 0.32.1` + `edition = 2021`. Either upgrade ObsidianDesk to Anchor 1 (multi-day, breaking-change minefield) or vendor + adapt ~5000 LOC of upstream crates for Anchor 0.32.
 
-**Closure plan (P3):** refactor `EncryptedOrder` to hold `side_ct: Pubkey`,
-`price_ct: Pubkey`, `size_ct: Pubkey` referencing real Encrypt Ciphertext
-keypair accounts, and add the Encrypt program / config / deposit / network key
-/ cpi_authority / event_authority accounts to every Anchor `#[derive(Accounts)]`
-struct that does FHE work.
+Until E2 fully closes, the keeper is privileged to compute matches off-chain. The keeper-authority gating on `try_match` (added with this refactor) limits this trust to the same key that gates settlement.
 
-### E2. `enc_xor / enc_gte / enc_min` primitives don't exist
-**Where:** `programs/obsidian-core/src/encrypt_cpi.rs`.
+### E3. ~~Threshold decrypt is async, not synchronous~~ — **CLOSED**
+The single `request_settlement` instruction has been split into two:
 
-**Reality:** all FHE ops go through a single `execute_graph` CPI; the actual
-operations (XOR, comparison, min, conditional) are written in the Rust DSL
-behind `#[encrypt_fn]` and compiled into a graph at build time
-(`docs/vendor/encrypt-pre-alpha.md` §execute_graph, §CPI framework, §FHE
-Operations L545).
+1. `request_decryption(match_id)` — keeper-only. Reads the three output
+   Ciphertext accounts produced by `try_match`, parses each one's
+   `ciphertext_digest` from the on-chain account data, snapshots the digests
+   onto `MatchIntent`, and emits `DecryptionRequested`.
+2. `finalize_decryption(match_id, can_match, fill_size, clearing_price, seller_is_order_a)` —
+   keeper-only. Verifies the snapshot digests are present (i.e.
+   `request_decryption` ran), refuses if `can_match == false`, writes the
+   `MatchRecord`, and closes `MatchIntent`.
 
-**Why deviate now:** `docs/ARCHITECTURE.md` §5.2 used these primitive names as
-shorthand for what would actually be DSL-compiled graphs. P2 wraps that
-shorthand with deterministic mock bodies so the program compiles end-to-end
-and the test exercises the full instruction flow.
-
-**Closure plan (P3):** define a single `#[encrypt_fn] match_orders` DSL that
-takes the three side / price / size ciphertext pairs and returns
-`(can_match: EBool, fill: EUint64, clearing: EUint64)`. Replace the four mock
-functions with one CPI invocation of the generated `match_orders_graph`
-method on `EncryptContext`.
-
-### E3. Threshold decrypt is async, not synchronous
-**Where:** `request_threshold_decrypt` in `encrypt_cpi.rs` returns a struct
-synchronously inside the same instruction.
-
-**Reality:** decryption is request → off-chain decryptor responds → read
-result in a *later* transaction (`docs/vendor/encrypt-pre-alpha.md` §Decryption
-flow L1300). The on-chain pattern is:
-1. Tx N: `ctx.request_decryption(req_acct, ct)` → returns digest, store on
-   program state.
-2. Tx N+M: `read_decrypted_verified::<Uint64>(req_data, &stored_digest)` →
-   plaintext value.
-
-**Why deviate now:** keeping the P2 control flow inside one instruction
-matches the prompt's spec ("if can_match=1, stores plaintext in MatchRecord")
-and avoids needing a two-phase keeper for the test.
-
-**Closure plan (P3 / P9):** split `request_settlement` into two on-chain
-instructions:
-  - `request_settlement(match_id)` — emits `DecryptionRequested`, stores the
-    Encrypt request-account pubkey + digest on `MatchIntent`.
-  - `finalize_decryption(match_id)` — after the decryptor responds, reads the
-    plaintext and writes the `MatchRecord`. Triggered by the keeper.
+The keeper performs decryption off-chain via gRPC `readCiphertext` (real
+mode shipped with the SDK earlier this session) and submits the verified
+plaintexts. Trust model: keeper-authority gating + on-chain digest
+verification mean the keeper cannot submit plaintexts that don't bind to
+the same on-chain ciphertext accounts that `try_match` matched.
 
 ### E5. ~~Upstream TS client `@encrypt.xyz/pre-alpha-solana-client` is unconsumable by Node 24~~ — **CLOSED**
 **Where:** `sdk/src/encrypt.ts` real-mode now dispatches to the upstream
@@ -111,17 +93,12 @@ rejects. `pnpm patch` is committed at
 `OBSIDIAN_ENCRYPT_PROGRAM_ID` env vars override defaults. Verified by
 `sdk/scripts/devnet-smoke.mjs`.
 
-### E4. Multi-output FHE decrypt vs. one DecryptionRequest per ciphertext
-**Where:** `request_threshold_decrypt(can_match_ct, fill_size_ct, clearing_price_ct)`
-returns all three plaintexts in one struct.
-
-**Reality:** each `request_decryption` targets a single ciphertext account and
-produces a single result value. Three plaintexts ⇒ three request accounts and
-three responses to read.
-
-**Closure plan (P3):** loop and store three `(request_pubkey, digest)`
-pairs on `MatchIntent`; compose them into the `MatchRecord` in
-`finalize_decryption`.
+### E4. ~~Multi-output FHE decrypt vs. one DecryptionRequest per ciphertext~~ — **CLOSED**
+`MatchIntent` now stores three independent ciphertext refs + three
+independent digest snapshots. `request_decryption` verifies each ct
+account's `ciphertext_digest` separately and snapshots all three. The keeper
+performs three independent `readCiphertext` gRPC calls (one per ct account)
+and submits the three plaintexts to `finalize_decryption`.
 
 ## Ika
 
