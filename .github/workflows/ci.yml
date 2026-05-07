@@ -7,8 +7,11 @@ on:
 
 env:
   NODE_VERSION: '24'
-  RUST_TOOLCHAIN: '1.93'
-  ANCHOR_VERSION: '0.32.1'
+  # Rust 1.94 + Anchor 1.0.2 to match `rust-toolchain.toml` and the
+  # `encrypt-anchor` upstream's expectations. The repo upgraded from
+  # 0.32 → 1 for gap E2 closure; older toolchains can't build it.
+  RUST_TOOLCHAIN: '1.94'
+  ANCHOR_VERSION: '1.0.2'
   SOLANA_INSTALL_URL: 'https://release.anza.xyz/stable/install'
 
 jobs:
@@ -55,11 +58,16 @@ jobs:
           sh -c "$(curl -sSfL ${{ env.SOLANA_INSTALL_URL }})"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
       - name: Install Anchor
-        run: |
-          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
-          avm install ${{ env.ANCHOR_VERSION }}
-          avm use ${{ env.ANCHOR_VERSION }}
+        # anchor-cli is published to crates.io for v1+, so install directly
+        # via cargo. Avoids the avm download path which has historically
+        # rate-limited from CI runners (`error decoding response body:
+        # operation timed out`).
+        run: cargo install anchor-cli@${{ env.ANCHOR_VERSION }} --locked
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # Skip --all-targets to keep `idl-build` cfg out of the compile;
+        # workspace clippy still covers programs/* lib + tests.
+        run: cargo clippy --workspace -- -D warnings
       - name: anchor build
-        run: anchor build
+        # `--no-idl` so the BPF compile completes before we try to extract
+        # the IDL; v1's IDL build is a separate `anchor idl build` step.
+        run: anchor build --no-idl

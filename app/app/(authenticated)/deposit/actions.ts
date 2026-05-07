@@ -14,11 +14,13 @@
  */
 
 import {
-  ika,
   DEFAULT_ORDER_EXPIRY_SLOTS,
   DEFAULT_OBSIDIAN_PROGRAM_ID,
   assertNotMockOnMainnet,
 } from '@obsidian-desk/sdk';
+// Subpath import keeps the gRPC-pulling code out of the barrel's reachable
+// graph (Turbopack would otherwise try to bundle it for the client).
+import * as ika from '@obsidian-desk/sdk/ika';
 
 // Trip the safety guard at module-evaluation time. If the deployed Next
 // server is mis-pointed at a mainnet RPC while still in mock mode, the

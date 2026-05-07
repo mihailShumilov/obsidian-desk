@@ -20,11 +20,12 @@
 import * as crypto from 'node:crypto';
 import { signAndFinalize, generateP2wpkh, fromWIF, p2wpkhAddressFromPublicKey, type BtcUnsignedTx } from './btc.ts';
 import { VendorSDKUnavailableError } from './errors.ts';
-import {
-  createIkaClient,
-  DEVNET_PRE_ALPHA_GRPC_URL as IKA_DEVNET_GRPC_URL,
-  type IkaDWalletClient,
-} from './ika-vendor/grpc.ts';
+// Type-only import keeps the @grpc/grpc-js dependency out of every consumer's
+// module graph. The runtime `createIkaClient` lives behind a dynamic import
+// in `ikaRealClient()` below — only loaded when real-mode is actually used.
+// Without this, Next/Turbopack pulls @grpc/grpc-js into the client bundle
+// just because a server component imports a string constant from this barrel.
+import type { IkaDWalletClient } from './ika-vendor/grpc.ts';
 
 export type Chain = 'bitcoin' | 'bitcoin-signet' | 'bitcoin-testnet';
 
@@ -88,13 +89,16 @@ interface MockEntry {
 const mockStore: Map<string, MockEntry> = new Map();
 
 // Real-mode singleton client (lazy-initialised, env-overridable URL).
-let realClient: IkaDWalletClient | null = null;
-function ikaRealClient(): IkaDWalletClient {
-  if (!realClient) {
-    const url = process.env['OBSIDIAN_IKA_GRPC_URL'] ?? IKA_DEVNET_GRPC_URL;
-    realClient = createIkaClient(url);
+let realClientPromise: Promise<IkaDWalletClient> | null = null;
+async function ikaRealClient(): Promise<IkaDWalletClient> {
+  if (!realClientPromise) {
+    realClientPromise = (async () => {
+      const m = await import('./ika-vendor/grpc.ts');
+      const url = process.env['OBSIDIAN_IKA_GRPC_URL'] ?? m.DEVNET_PRE_ALPHA_GRPC_URL;
+      return m.createIkaClient(url);
+    })();
   }
-  return realClient;
+  return realClientPromise;
 }
 
 /** Decode a 32-byte hex string back to bytes. */
@@ -146,7 +150,8 @@ export async function createDWallet(
       );
     }
     const senderPubkey = solanaPubkeyToBytes(options.creator);
-    const dkg = await ikaRealClient().requestDKG(senderPubkey);
+    const client = await ikaRealClient();
+    const dkg = await client.requestDKG(senderPubkey);
     // `id` for the dWallet = hex of the secp256k1 public key. This matches
     // the pre-alpha network's dwallet identity surface (the on-chain dwallet
     // PDA is derived from `(curve_u16_le, public_key)` per the docs).
@@ -296,13 +301,14 @@ export async function requestSign(
     // those bytes.
     const senderPubkey = solanaPubkeyToBytes(entry.creator!);
     const dwalletAddrBytes = entry.publicKey;
-    const presignId = await ikaRealClient().requestPresign(senderPubkey, dwalletAddrBytes);
+    const client = await ikaRealClient();
+    const presignId = await client.requestPresign(senderPubkey, dwalletAddrBytes);
     // Hash the BTC tx for ECDSA signing. For now we sign the raw PSBT
     // serialization; production should hash exactly the sighash the BTC
     // network expects (BIP-143 for P2WPKH).
     const message = Buffer.from(btcTx.psbt, 'base64');
     const txSignatureBytes = hexToBytes(solanaProof.txSignature.padStart(128, '0').slice(0, 128));
-    const sig = await ikaRealClient().requestSign(
+    const sig = await client.requestSign(
       senderPubkey,
       dwalletAddrBytes,
       message,

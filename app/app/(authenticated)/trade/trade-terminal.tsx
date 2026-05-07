@@ -16,7 +16,13 @@ import { useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { encrypt } from '@obsidian-desk/sdk';
+// We don't import `@obsidian-desk/sdk/encrypt` here even though we'd love
+// to call `encryptOrder` directly — its real-mode path dynamic-imports
+// `@encrypt.xyz/pre-alpha-solana-client/grpc` which transitively pulls
+// `@grpc/grpc-js`, and Turbopack still creates a client chunk for that
+// graph (failing the build with `Module not found: 'dns'/'fs'/'net'`).
+// The trade-page demo only needs a 16-byte random nonce as the order id;
+// real encryption belongs behind a Server Action when P9 lands.
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ChainBadge } from '@/components/obsidian/chain-badge';
@@ -90,15 +96,12 @@ export function TradeTerminal(): JSX.Element {
   const book = useMemo(() => bookView(yourOrders), [yourOrders]);
 
   async function handleSubmit(form: OrderFormSubmit): Promise<void> {
-    // Actual FHE encrypt (mock mode) — returns real CT bytes we can use
-    // for the toast. Does not touch Solana yet (P9 wires submitOrder).
-    const blob = await encrypt.encryptOrder(
-      form.side === 'bid' ? 'bid' : 'ask',
-      BigInt(Math.round(form.priceUsdc * 1_000_000)),
-      BigInt(Math.round(form.sizeBtc * 100_000_000)),
-    );
-
-    const id = Buffer.from(blob.nonce).toString('hex');
+    // Generate a 16-byte nonce for the order id. P9 will route this
+    // through a Server Action that calls the SDK's real-mode encryptOrder
+    // (which talks to the Encrypt gRPC service) before submitting on-chain.
+    const nonce = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(nonce);
+    const id = Array.from(nonce, (b) => b.toString(16).padStart(2, '0')).join('');
     const next: YourOrder = {
       id,
       side: form.side,

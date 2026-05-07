@@ -107,7 +107,8 @@ export async function pollOnce(
   // Lazy-resolve the default sdk namespace so callers in tests can inject
   // their own instance (sharing the in-memory mock store).
   const ikaSdk =
-    options.ikaSdk ?? ((await import('@obsidian-desk/sdk')).ika as unknown as IkaNamespace);
+    options.ikaSdk ??
+    (((await import('@obsidian-desk/sdk/ika')) as unknown) as IkaNamespace);
   const btcSdk = options.btcSdk ?? (btcSdkDefault as unknown as BtcNamespace);
   const report: PollReport = { attempted: [], settled: [], failed: [] };
 

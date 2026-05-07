@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs';
 import * as anchor from '@coral-xyz/anchor';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import BN from 'bn.js';
-import { encrypt as encryptSdk } from '@obsidian-desk/sdk';
+import * as encryptSdk from '@obsidian-desk/sdk/encrypt';
 import { loadKeypair, type LooseProgram, type LooseProgramMethods } from '../src/anchor-shims.ts';
 
 async function main(): Promise<void> {

@@ -31,7 +31,7 @@ import {
   sendAndConfirmTransaction,
   type Signer,
 } from '@solana/web3.js';
-import { encrypt as encryptSdk } from '@obsidian-desk/sdk';
+import * as encryptSdk from '@obsidian-desk/sdk/encrypt';
 import { createHash } from 'node:crypto';
 import {
   ENCRYPT_PROGRAM_ID,

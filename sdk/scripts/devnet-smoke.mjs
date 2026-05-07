@@ -18,7 +18,10 @@
  */
 
 import { Keypair } from '@solana/web3.js';
-import { encrypt, ika } from '../dist/index.js';
+// `encrypt` and `ika` are no longer re-exported from the barrel (see
+// sdk/src/index.ts) — the gRPC-pulling code is opt-in via subpath imports.
+import * as encrypt from '../dist/encrypt.js';
+import * as ika from '../dist/ika.js';
 import { describeCiphertext } from '../dist/encrypt.js';
 
 process.env.OBSIDIAN_ENCRYPT_MODE = 'real';

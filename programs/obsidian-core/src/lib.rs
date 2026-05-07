@@ -22,9 +22,22 @@
 //! placeholder `mock_match_outputs` (gap E2 — execute_graph CPI is blocked
 //! on the upstream Anchor v1 toolchain skew).
 
+// Macro-generated code from `anchor_lang::program` and
+// `encrypt_dsl::encrypt_fn` trips a handful of clippy lints (function
+// arity, sub-expression divergence, doc list indentation). The expansions
+// are upstream-controlled, so we allow them at the crate level instead of
+// pinning lint suppressions deep inside the macro output.
+#![allow(
+    clippy::too_many_arguments,
+    clippy::diverging_sub_expression,
+    clippy::doc_overindented_list_items
+)]
+
 use anchor_lang::prelude::*;
 use encrypt_anchor::EncryptContext;
-use encrypt_dsl::prelude::encrypt_fn;
+// `encrypt_dsl::prelude` brings in EBool / EUint64 plus the operator
+// trait impls the `#[encrypt_fn]` macro relies on (`+`, `-`, `^`, `&`,
+// `>=`, `.min`, etc. on Encrypted values).
 use encrypt_dsl::prelude::*;
 
 pub mod encrypt_cpi;
