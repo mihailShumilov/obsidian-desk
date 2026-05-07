@@ -32,8 +32,23 @@ export interface CreateDWalletResult {
   address: string;
 }
 
-export async function createDWalletAction(): Promise<CreateDWalletResult> {
-  const dw = await ika.createDWallet('bitcoin-signet');
+/**
+ * `walletPubkey` is the Phantom-connected Solana pubkey from the client.
+ * In mock mode it acts as the creator-binding token: subsequent
+ * `lockPolicyAction` calls must pass the same pubkey or be rejected.
+ *
+ * This is NOT a signature check — anyone could pass any pubkey. Real
+ * ownership verification arrives with Ika MPC (gap I1, closure plan in
+ * docs/gaps.md). Until then, the binding limits grief to "attacker who
+ * knows both the dwallet id AND the original creator's wallet pubkey".
+ */
+export async function createDWalletAction(
+  walletPubkey: string,
+): Promise<CreateDWalletResult> {
+  if (typeof walletPubkey !== 'string' || walletPubkey.length === 0) {
+    throw new Error('createDWalletAction: walletPubkey is required');
+  }
+  const dw = await ika.createDWallet('bitcoin-signet', { creator: walletPubkey });
   return { id: dw.id, chain: dw.chain, address: dw.address };
 }
 
@@ -44,13 +59,21 @@ export interface LockPolicyResult {
 export async function lockPolicyAction(
   dwalletId: string,
   maxAmountSats: string,
+  walletPubkey: string,
 ): Promise<LockPolicyResult> {
-  const result = await ika.lockPolicy(dwalletId, {
-    controller: PROGRAM_ID,
-    maxAmountSats: BigInt(maxAmountSats),
-    expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
-    rules: [],
-  });
+  if (typeof walletPubkey !== 'string' || walletPubkey.length === 0) {
+    throw new Error('lockPolicyAction: walletPubkey is required');
+  }
+  const result = await ika.lockPolicy(
+    dwalletId,
+    {
+      controller: PROGRAM_ID,
+      maxAmountSats: BigInt(maxAmountSats),
+      expirySlots: DEFAULT_ORDER_EXPIRY_SLOTS,
+      rules: [],
+    },
+    { caller: walletPubkey },
+  );
   return { policyAccountOnSolana: result.policyAccountOnSolana };
 }
 

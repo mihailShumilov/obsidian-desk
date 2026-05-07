@@ -15,6 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { Button } from '@/components/ui/button';
 import { ChainBadge } from '@/components/obsidian/chain-badge';
 import { ProgressRail } from '@/components/deposit/progress-rail';
@@ -115,12 +116,17 @@ function CreateStep({
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { publicKey } = useWallet();
 
   async function generate(): Promise<void> {
+    if (!publicKey) {
+      setError('Connect a Solana wallet first.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const result = await createDWalletAction();
+      const result = await createDWalletAction(publicKey.toBase58());
       onCreated({ id: result.id, address: result.address, chain: 'bitcoin-signet' });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -280,16 +286,25 @@ function LockStep({
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { publicKey } = useWallet();
   // Cap at the on-chain balance so the policy never authorizes more
   // than what's actually been funded.
   const maxAmount = balanceSats > 0n ? balanceSats : 100_000_000n;
 
   async function lock(): Promise<void> {
     if (!dwalletId) return;
+    if (!publicKey) {
+      setError('Connect the same Solana wallet you used to create the dWallet.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const result = await lockPolicyAction(dwalletId, maxAmount.toString());
+      const result = await lockPolicyAction(
+        dwalletId,
+        maxAmount.toString(),
+        publicKey.toBase58(),
+      );
       onLocked(result.policyAccountOnSolana);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

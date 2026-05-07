@@ -68,6 +68,10 @@ interface MockEntry {
   wif: string;
   chain: Chain;
   address: string;
+  /** Pubkey (or any opaque token) of the entity that created the dWallet.
+   *  `lockPolicy` rejects callers that don't match. Stand-in for the proper
+   *  Ika MPC owner check (gap I1). */
+  creator?: string;
   policy?: Policy;
   policyAccountOnSolana?: string;
 }
@@ -92,18 +96,22 @@ function newDwalletId(): string {
 // Public API (matches the prompt-required signatures)
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function createDWallet(chain: Chain): Promise<DWallet> {
+export async function createDWallet(
+  chain: Chain,
+  options: { creator?: string } = {},
+): Promise<DWallet> {
   if (currentMode() === 'real') unsupportedReal('createDWallet');
   const network = chainToBtcNetwork(chain);
   const { wif, address } = generateP2wpkh(network);
   const id = newDwalletId();
-  mockStore.set(id, { wif, chain, address });
+  mockStore.set(id, { wif, chain, address, creator: options.creator });
   return { id, chain, address };
 }
 
 export async function lockPolicy(
   dwalletId: string,
   policy: Policy,
+  options: { caller?: string } = {},
 ): Promise<{ policyAccountOnSolana: string }> {
   if (currentMode() === 'real') unsupportedReal('lockPolicy');
   const entry = mockStore.get(dwalletId);
@@ -112,6 +120,15 @@ export async function lockPolicy(
       'ika',
       `mock lockPolicy: dWallet not found in process-local store ` +
         `(was it created in this process? see gap I2)`,
+    );
+  }
+  // Owner-binding check. If the dWallet was created with a `creator` token,
+  // only that same token may lock its policy. Stand-in for Ika MPC owner
+  // verification (gap I1) — proper closure requires wallet-signed nonce.
+  if (entry.creator !== undefined && entry.creator !== options.caller) {
+    throw new VendorSDKUnavailableError(
+      'ika',
+      `mock lockPolicy: caller is not the dWallet creator`,
     );
   }
   // Fake but deterministic policy account address derived from id + controller.
