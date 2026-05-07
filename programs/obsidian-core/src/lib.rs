@@ -382,9 +382,13 @@ pub struct SettlementOutcome<'info> {
 pub struct RequestSettlement<'info> {
     #[account(mut)]
     pub market: Account<'info, MarketState>,
+    /// Closed on success — its rent returns to `payer` and the account
+    /// data is wiped, so a stale intent can't be enumerated by indexers.
     #[account(
+        mut,
         has_one = market,
         constraint = match_intent.match_id == match_id @ ErrorCode::InvalidMatchId,
+        close = payer,
     )]
     pub match_intent: Account<'info, MatchIntent>,
     #[account(
