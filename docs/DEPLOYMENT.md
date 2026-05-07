@@ -103,6 +103,46 @@ fly deploy
 
 Resource floor: 256 MB RAM is enough for a single Next instance under modest traffic.
 
+## 3.5 Real-mode SDK (Encrypt + Ika devnet)
+
+`sdk/src/encrypt.ts` and `sdk/src/ika.ts` ship two modes:
+
+| Mode | Effect |
+|---|---|
+| `mock` (default) | In-process FHE / DKG simulation. Plaintext-recoverable from the mock ciphertexts. Suitable for offline tests. |
+| `real` | Routes to the upstream gRPC services on Solana devnet. Real ciphertext IDs from Encrypt; real secp256k1 dWallet keys from Ika DKG. |
+
+Flip via env vars:
+
+```bash
+OBSIDIAN_ENCRYPT_MODE=real OBSIDIAN_IKA_MODE=real \
+  OBSIDIAN_ENCRYPT_GRPC_URL=pre-alpha-dev-1.encrypt.ika-network.net:443 \
+  OBSIDIAN_ENCRYPT_PROGRAM_ID=4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8 \
+  OBSIDIAN_IKA_GRPC_URL=pre-alpha-dev-1.ika.ika-network.net:443 \
+  pnpm dev
+```
+
+Smoke test the live integration:
+
+```bash
+pnpm -F @obsidian-desk/sdk build
+node sdk/scripts/devnet-smoke.mjs
+```
+
+Expected output: 4 green checks (encryptU64, encryptOrder, createDWallet,
+lockPolicy). Each line shows the real-mode artifact (ciphertext id,
+btc address) returned by devnet.
+
+**What's still pending in real mode** (tracked in `docs/gaps.md`):
+- E1, E2, E3, E4: the on-chain program still uses inline `Vec<u8>` ciphertexts
+  and a synchronous mock `request_threshold_decrypt`. Real `execute_graph`
+  CPI + async `request_decryption` flow is the next milestone.
+- I1: lockPolicy doesn't yet write to the on-chain Ika program — it
+  stores the policy intent in the SDK process for the keeper to pick up.
+
+The `assertNotMockOnMainnet` boot guard remains the backstop against
+running mock mode against any mainnet RPC.
+
 ## 4. Keeper → Fly.io (planned)
 
 ```bash

@@ -18,8 +18,13 @@
  */
 
 import * as crypto from 'node:crypto';
-import { signAndFinalize, generateP2wpkh, fromWIF, type BtcUnsignedTx } from './btc.ts';
+import { signAndFinalize, generateP2wpkh, fromWIF, p2wpkhAddressFromPublicKey, type BtcUnsignedTx } from './btc.ts';
 import { VendorSDKUnavailableError } from './errors.ts';
+import {
+  createIkaClient,
+  DEVNET_PRE_ALPHA_GRPC_URL as IKA_DEVNET_GRPC_URL,
+  type IkaDWalletClient,
+} from './ika-vendor/grpc.ts';
 
 export type Chain = 'bitcoin' | 'bitcoin-signet' | 'bitcoin-testnet';
 
@@ -65,7 +70,9 @@ function unsupportedReal(api: string): never {
 // ────────────────────────────────────────────────────────────────────────────
 
 interface MockEntry {
-  wif: string;
+  /** Set in mock mode only — real-mode entries don't hold WIFs (the private
+   *  share lives in the Ika network). */
+  wif?: string;
   chain: Chain;
   address: string;
   /** Pubkey (or any opaque token) of the entity that created the dWallet.
@@ -74,9 +81,37 @@ interface MockEntry {
   creator?: string;
   policy?: Policy;
   policyAccountOnSolana?: string;
+  /** Real-mode only: secp256k1 compressed dWallet public key from DKG. */
+  publicKey?: Uint8Array;
 }
 
 const mockStore: Map<string, MockEntry> = new Map();
+
+// Real-mode singleton client (lazy-initialised, env-overridable URL).
+let realClient: IkaDWalletClient | null = null;
+function ikaRealClient(): IkaDWalletClient {
+  if (!realClient) {
+    const url = process.env['OBSIDIAN_IKA_GRPC_URL'] ?? IKA_DEVNET_GRPC_URL;
+    realClient = createIkaClient(url);
+  }
+  return realClient;
+}
+
+/** Decode a 32-byte hex string back to bytes. */
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) throw new Error('hex length odd');
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function bytesToHex(b: Uint8Array): string {
+  let s = '';
+  for (const x of b) s += x.toString(16).padStart(2, '0');
+  return s;
+}
 
 function chainToBtcNetwork(chain: Chain): 'signet' | 'testnet' {
   if (chain === 'bitcoin-testnet') return 'testnet';
@@ -100,12 +135,68 @@ export async function createDWallet(
   chain: Chain,
   options: { creator?: string } = {},
 ): Promise<DWallet> {
-  if (currentMode() === 'real') unsupportedReal('createDWallet');
   const network = chainToBtcNetwork(chain);
+  if (currentMode() === 'real') {
+    // Bind the DKG to the creator's Solana pubkey so the same caller is
+    // identifiable on subsequent presign / sign calls.
+    if (!options.creator) {
+      throw new VendorSDKUnavailableError(
+        'ika',
+        'real-mode createDWallet requires a creator wallet pubkey',
+      );
+    }
+    const senderPubkey = solanaPubkeyToBytes(options.creator);
+    const dkg = await ikaRealClient().requestDKG(senderPubkey);
+    // `id` for the dWallet = hex of the secp256k1 public key. This matches
+    // the pre-alpha network's dwallet identity surface (the on-chain dwallet
+    // PDA is derived from `(curve_u16_le, public_key)` per the docs).
+    const id = bytesToHex(dkg.publicKey);
+    const address = p2wpkhAddressFromPublicKey(dkg.publicKey, network);
+    mockStore.set(id, {
+      chain,
+      address,
+      creator: options.creator,
+      publicKey: dkg.publicKey,
+    });
+    return { id, chain, address };
+  }
   const { wif, address } = generateP2wpkh(network);
   const id = newDwalletId();
   mockStore.set(id, { wif, chain, address, creator: options.creator });
   return { id, chain, address };
+}
+
+/**
+ * Decode a base58 Solana pubkey to its 32-byte form using @solana/web3.js
+ * (already a workspace dep via keeper). Lazy-imported so the SDK stays
+ * tree-shakable for clients that don't touch real-mode.
+ */
+function solanaPubkeyToBytes(b58: string): Uint8Array {
+  // bs58 alphabet — small inline impl avoids pulling @solana/web3.js into
+  // the SDK's import graph just for one decode.
+  const ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let n = 0n;
+  for (const c of b58) {
+    const idx = ALPHA.indexOf(c);
+    if (idx < 0) throw new Error('invalid base58 char');
+    n = n * 58n + BigInt(idx);
+  }
+  // Pad to 32 bytes (Solana pubkeys are exactly 32B; leading zeros encode as '1').
+  const out = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  // Account for leading-zero pad bytes encoded as '1' chars.
+  let zeros = 0;
+  for (const c of b58) {
+    if (c === '1') zeros++;
+    else break;
+  }
+  if (zeros > 0 && out.slice(0, zeros).some((x) => x !== 0)) {
+    // High bytes already non-zero — nothing to do.
+  }
+  return out;
 }
 
 export async function lockPolicy(
@@ -113,7 +204,35 @@ export async function lockPolicy(
   policy: Policy,
   options: { caller?: string } = {},
 ): Promise<{ policyAccountOnSolana: string }> {
-  if (currentMode() === 'real') unsupportedReal('lockPolicy');
+  if (currentMode() === 'real') {
+    // Pre-alpha Ika devnet doesn't yet expose a gRPC `LockPolicy` op — the
+    // policy enforcement happens on the Solana Ika program side via the
+    // dWallet PDA's authority field. For the real-mode integration we
+    // simply persist the policy intent locally; the on-chain Ika program
+    // call lives in `programs/obsidian-core` (gap I3 closure plan).
+    const entry = mockStore.get(dwalletId);
+    if (!entry) {
+      throw new VendorSDKUnavailableError(
+        'ika',
+        'real lockPolicy: dWallet not found in this process — was it created here?',
+      );
+    }
+    if (entry.creator !== undefined && entry.creator !== options.caller) {
+      throw new VendorSDKUnavailableError(
+        'ika',
+        'real lockPolicy: caller is not the dWallet creator',
+      );
+    }
+    // Deterministic placeholder policy account — replaced by the real
+    // on-chain account pubkey once the Ika program LockPolicy ix is wired.
+    const hash = crypto
+      .createHash('sha256')
+      .update(`${dwalletId}|${policy.controller}|${policy.maxAmountSats.toString()}`)
+      .digest();
+    const policyAccountOnSolana = `ika_pending_${hash.subarray(0, 16).toString('hex')}`;
+    mockStore.set(dwalletId, { ...entry, policy, policyAccountOnSolana });
+    return { policyAccountOnSolana };
+  }
   const entry = mockStore.get(dwalletId);
   if (!entry) {
     throw new VendorSDKUnavailableError(
@@ -146,7 +265,55 @@ export async function requestSign(
   btcTx: BtcUnsignedTx,
   solanaProof: { txSignature: string; matchId: bigint },
 ): Promise<{ signedTxHex: string; broadcastTxid?: string }> {
-  if (currentMode() === 'real') unsupportedReal('requestSign');
+  if (currentMode() === 'real') {
+    const entry = mockStore.get(dwalletId);
+    if (!entry || !entry.publicKey) {
+      throw new VendorSDKUnavailableError(
+        'ika',
+        'real requestSign: dWallet missing publicKey — was it created in this process?',
+      );
+    }
+    if (!entry.policy) {
+      throw new VendorSDKUnavailableError(
+        'ika',
+        'real requestSign: no locked policy on this dWallet',
+      );
+    }
+    // Real-mode policy enforcement still runs client-side: the Ika network
+    // pre-alpha doesn't enforce per-tx limits without the on-chain Ika
+    // program LockPolicy ix being committed. Closure tracked under gap I3.
+    for (const out of btcTx.outputs) {
+      if (out.valueSats > entry.policy.maxAmountSats) {
+        throw new VendorSDKUnavailableError(
+          'ika',
+          'real requestSign: output value exceeds policy.maxAmountSats',
+        );
+      }
+    }
+    // The dWallet "address" used by the Ika gRPC isn't the BTC address —
+    // it's the secp256k1 public key bytes (which act as the dWallet PDA
+    // identity per the docs §pda-seeds). `entry.publicKey` is exactly
+    // those bytes.
+    const senderPubkey = solanaPubkeyToBytes(entry.creator!);
+    const dwalletAddrBytes = entry.publicKey;
+    const presignId = await ikaRealClient().requestPresign(senderPubkey, dwalletAddrBytes);
+    // Hash the BTC tx for ECDSA signing. For now we sign the raw PSBT
+    // serialization; production should hash exactly the sighash the BTC
+    // network expects (BIP-143 for P2WPKH).
+    const message = Buffer.from(btcTx.psbt, 'base64');
+    const txSignatureBytes = hexToBytes(solanaProof.txSignature.padStart(128, '0').slice(0, 128));
+    const sig = await ikaRealClient().requestSign(
+      senderPubkey,
+      dwalletAddrBytes,
+      message,
+      presignId,
+      txSignatureBytes,
+    );
+    // Real-mode mock signatures from pre-alpha Ika are not yet bitcoinjs-lib
+    // verifiable, so we surface the raw network signature as the proof and
+    // leave PSBT finalization to a later closure step (gap I1 production).
+    return { signedTxHex: bytesToHex(sig) };
+  }
   const entry = mockStore.get(dwalletId);
   if (!entry) {
     throw new VendorSDKUnavailableError(
@@ -169,6 +336,12 @@ export async function requestSign(
         `mock requestSign: output value exceeds policy.maxAmountSats`,
       );
     }
+  }
+  if (!entry.wif) {
+    throw new VendorSDKUnavailableError(
+      'ika',
+      'mock requestSign: dWallet has no WIF (was it created in real mode?)',
+    );
   }
   const key = fromWIF(entry.wif, btcTx.network);
   const signedTxHex = signAndFinalize(btcTx, key);

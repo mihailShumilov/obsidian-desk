@@ -39,5 +39,10 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.19.0",
     "typescript": "5.9.2"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@encrypt.xyz/pre-alpha-solana-client@0.1.1": "patches/@encrypt.xyz__pre-alpha-solana-client@0.1.1.patch"
+    }
   }
 }

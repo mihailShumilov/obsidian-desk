@@ -167,6 +167,23 @@ export function fromWIF(wif: string, network: BtcNetworkName = 'signet'): ECPair
 }
 
 /**
+ * Derive a P2WPKH address from a 33-byte compressed secp256k1 public key.
+ * Used to render the BTC address for an Ika dWallet whose private share lives
+ * in the network — we never have a full private key client-side.
+ */
+export function p2wpkhAddressFromPublicKey(
+  publicKey: Uint8Array,
+  network: BtcNetworkName = 'signet',
+): string {
+  const net = networkFor(network);
+  const { address } = payments.p2wpkh({ pubkey: Buffer.from(publicKey), network: net });
+  if (!address) {
+    throw new EncryptionError('p2wpkhAddressFromPublicKey: bitcoinjs-lib failed to derive an address');
+  }
+  return address;
+}
+
+/**
  * Derive the hex-encoded P2WPKH output script for a bech32 address.
  * Used by mock UTXO providers so the synthesized input has a script that
  * matches the keypair backing `address` — otherwise PSBT signing fails

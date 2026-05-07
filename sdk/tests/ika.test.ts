@@ -160,18 +160,18 @@ describe('ika (mock mode)', () => {
   });
 });
 
-describe('ika (real mode unsupported)', () => {
+describe('ika (real mode contract)', () => {
   before(() => {
     process.env['OBSIDIAN_IKA_MODE'] = 'real';
   });
 
-  it('throws VendorSDKUnavailableError for createDWallet', async () => {
+  it('createDWallet without a creator wallet pubkey is refused', async () => {
     try {
       await createDWallet('bitcoin-signet');
       assert.fail('expected throw');
     } catch (err) {
       assert.ok(err instanceof VendorSDKUnavailableError);
-      assert.match(err.message, /gap I0|OBSIDIAN_IKA_MODE=mock/);
+      assert.match(err.message, /creator wallet pubkey/);
     }
     process.env['OBSIDIAN_IKA_MODE'] = 'mock';
   });

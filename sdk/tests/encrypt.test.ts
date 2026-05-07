@@ -93,18 +93,18 @@ describe('encrypt (mock mode)', () => {
   });
 });
 
-describe('encrypt (real mode unsupported)', () => {
+describe('encrypt (real mode async-decrypt boundary)', () => {
   before(() => {
     process.env['OBSIDIAN_ENCRYPT_MODE'] = 'real';
   });
 
-  it('throws VendorSDKUnavailableError pointing to gap E5', async () => {
+  it('refuses synchronous requestThresholdDecrypt in real mode (gap E3)', async () => {
     try {
-      await encryptU64(1n);
+      await requestThresholdDecrypt(new Uint8Array(32), 'sig');
       assert.fail('expected throw');
     } catch (err) {
       assert.ok(err instanceof VendorSDKUnavailableError);
-      assert.match(err.message, /gap E5|OBSIDIAN_ENCRYPT_MODE=mock/);
+      assert.match(err.message, /async|gap E3|request_decryption/);
     }
     // Reset for subsequent suites in the same process.
     process.env['OBSIDIAN_ENCRYPT_MODE'] = 'mock';

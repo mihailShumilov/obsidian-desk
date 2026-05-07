@@ -85,43 +85,31 @@ instructions:
   - `finalize_decryption(match_id)` — after the decryptor responds, reads the
     plaintext and writes the `MatchRecord`. Triggered by the keeper.
 
-### E5. Upstream TS client `@encrypt.xyz/pre-alpha-solana-client` is unconsumable by Node 24
-**Where:** `sdk/src/encrypt.ts` — real-mode entry points throw
-`VendorSDKUnavailableError` instead of dispatching to the upstream gRPC
-client.
+### E5. ~~Upstream TS client `@encrypt.xyz/pre-alpha-solana-client` is unconsumable by Node 24~~ — **CLOSED**
+**Where:** `sdk/src/encrypt.ts` real-mode now dispatches to the upstream
+gRPC client.
 
-**Reality:** The published package
-(`https://www.npmjs.com/package/@encrypt.xyz/pre-alpha-solana-client`,
-v0.1.0) declares its `exports."./grpc"` as `./src/grpc.ts` — an
-**uncompiled TypeScript file**. The package's `dist/` directory only
-contains the Codama-generated on-chain instruction bindings; the gRPC
-client (which is what we actually need for `createInput` and
-`readCiphertext`) ships only as `.ts`. Node 24's native TS strip refuses
-to handle `.ts` files inside `node_modules/`, raising
-`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`. The package
-README/install instructions assume a `bun add` consumer; bun can run TS
-inside `node_modules` natively.
+**Original reality (0.1.0):** the published package declared
+`exports."./grpc"` as `./src/grpc.ts`. Node 24 refuses to strip TS from
+`node_modules/` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`).
 
-**Why deviate now:** the prompt's "DO NOT invent missing primitives"
-rule applies — we surface a clean `UnsupportedOperation` (via
-`VendorSDKUnavailableError`) and document the gap rather than vendoring
-the upstream. Mock mode satisfies the entire P3 acceptance set
-(round-trip, e2e submit, debug CLI) without the broken real-mode code
-path.
+**Closure (2026-05-07):** Encrypt 0.1.1 ships compiled `dist/grpc.js` +
+`.d.ts` but its `exports` field still points at `./src/grpc.ts`, and
+the precompiled `dist/grpc.js` uses extension-less imports that Node ESM
+rejects. `pnpm patch` is committed at
+`patches/@encrypt.xyz__pre-alpha-solana-client@0.1.1.patch` to:
 
-**Closure plan:**
-1. Preferred: file an issue with `dwallet-labs/encrypt-pre-alpha`
-   asking them to ship compiled `dist/grpc/index.{js,d.ts}` and update
-   `exports."./grpc"` to point there. Once available, our `encrypt.ts`
-   real-mode branches dynamic-import the package and call
-   `createInput` + `readCiphertext` directly.
-2. Stopgap: vendor `src/grpc.ts` (~189 lines) and the protobuf-generated
-   service into `sdk/src/encrypt-grpc/`, depend directly on
-   `@grpc/grpc-js` + `@bufbuild/protobuf`. Adds ~200 LOC of vendored
-   code; keep behind the same `OBSIDIAN_ENCRYPT_MODE=real` flag.
-3. Stopgap: ship a Docker mock gRPC server (P10's `encrypt-mock`) that
-   speaks the same protobuf service, so e2e tests have a real network
-   target without touching upstream's TS distribution.
+1. Redirect `exports["."]`, `["./grpc"]`, `["./grpc-web"]` to the
+   `dist/...` files.
+2. Append `.js` to all relative imports inside `dist/` so Node ESM
+   resolves them.
+
+`sdk/src/encrypt.ts` real-mode dispatches `encryptU64`, `encryptSide`,
+`encryptOrder` to `createEncryptClient(...).createInput(...)` against
+`pre-alpha-dev-1.encrypt.ika-network.net:443` and returns the on-chain
+32-byte ciphertext identifier per input. `OBSIDIAN_ENCRYPT_GRPC_URL` and
+`OBSIDIAN_ENCRYPT_PROGRAM_ID` env vars override defaults. Verified by
+`sdk/scripts/devnet-smoke.mjs`.
 
 ### E4. Multi-output FHE decrypt vs. one DecryptionRequest per ciphertext
 **Where:** `request_threshold_decrypt(can_match_ct, fill_size_ct, clearing_price_ct)`
@@ -137,24 +125,34 @@ pairs on `MatchIntent`; compose them into the `MatchRecord` in
 
 ## Ika
 
-### I0. Upstream TS client `@ika.xyz/pre-alpha-solana-client` is unconsumable by Node 24
-**Where:** `sdk/src/ika.ts` real-mode entry points throw
-`VendorSDKUnavailableError`.
+### I0. ~~Upstream TS client `@ika.xyz/pre-alpha-solana-client` is unconsumable by Node 24~~ — **CLOSED (vendored)**
+**Where:** `sdk/src/ika-vendor/`.
 
-**Reality:** Same packaging bug as Encrypt's gap E5. The Ika TS client v0.1.0
-ships only uncompiled `.ts` files (`src/grpc.ts`, `src/grpc-web.ts`,
-`src/generated/...`). Its `package.json` `exports` point at those `.ts`
-sources. Node 24 refuses to strip TypeScript from `node_modules`
-(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). Both upstream packages
-target the bun runtime which handles `.ts` in `node_modules` natively.
+**Original reality (0.1.0/0.1.1):** Ika ships ONLY `.ts` sources — even
+the main entry `./src/generated/index.ts` is uncompiled. Patching
+`exports` doesn't help because there's no compiled output to point at.
 
-**Why deviate now:** "DO NOT invent missing primitives" — we surface a clean
-`VendorSDKUnavailableError` and ship a deterministic mock that satisfies
-P4's full e2e settlement loop.
+**Closure (2026-05-07):** vendored `src/grpc.ts`, `src/bcs-types.ts`,
+and `src/generated/grpc/ika_dwallet.ts` (~1100 LOC total) into
+`sdk/src/ika-vendor/`. Two project-specific edits applied:
 
-**Closure plan:** identical to E5 — file an upstream issue asking for
-compiled `dist/` output, OR vendor `grpc.ts` (~200 LOC) into the SDK, OR
-add a Docker mock gRPC service in P10 that speaks the same protobuf API.
+1. `curve: { Curve25519: true }` → `curve: { Secp256k1: true }` and
+   `signature_algorithm: { EdDSA: true }` → `{ ECDSASecp256k1: true }`
+   so the dWallet matches Bitcoin's signature scheme.
+2. Default gRPC URL now `pre-alpha-dev-1.ika.ika-network.net:443`
+   (devnet) instead of `127.0.0.1:50051`.
+
+`sdk/src/ika.ts` real-mode dispatches `createDWallet` →
+`requestDKG`, deriving a P2WPKH signet address from the returned
+secp256k1 public key via `p2wpkhAddressFromPublicKey`. `requestSign`
+chains `requestPresign` → `requestSign` against the same client.
+`OBSIDIAN_IKA_GRPC_URL` env var overrides the default endpoint. Verified
+by `sdk/scripts/devnet-smoke.mjs`.
+
+**Caveats:** vendored code carries the upstream license
+(`BSD-3-Clause-Clear`, `Copyright (c) dWallet Labs, Ltd.`); see top-of-file
+notices preserved verbatim. Re-sync from upstream when 0.1.2+ ships a
+compiled `dist/`.
 
 ### I1. No real DKG (distributed key generation) without network access
 **Where:** mock `createDWallet` synthesizes a P2WPKH key locally with

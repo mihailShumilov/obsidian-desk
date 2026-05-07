@@ -1,0 +1,77 @@
+diff --git a/dist/generated/grpc-web/encrypt_service.client.js b/dist/generated/grpc-web/encrypt_service.client.js
+index 0a520554b607af1e3a3ec98a653c2ff716adedb9..c16581e65786a9616c0715d3202e77f307300a74 100644
+--- a/dist/generated/grpc-web/encrypt_service.client.js
++++ b/dist/generated/grpc-web/encrypt_service.client.js
+@@ -1,4 +1,4 @@
+-import { EncryptService } from "./encrypt_service";
++import { EncryptService } from "./encrypt_service.js";
+ import { stackIntercept } from "@protobuf-ts/runtime-rpc";
+ /**
+  * Client-facing gRPC API for the Encrypt executor.
+diff --git a/dist/grpc-web.js b/dist/grpc-web.js
+index a741b60f0394ec386c2f70d601b4256ce1646852..6febf02b2d48905e8d75835d819e90c6eb6718de 100644
+--- a/dist/grpc-web.js
++++ b/dist/grpc-web.js
+@@ -17,9 +17,9 @@
+  *   });
+  */
+ import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
+-import { EncryptServiceClient } from "./generated/grpc-web/encrypt_service.client";
+-import { Chain } from "./generated/grpc-web/encrypt_service";
+-export { Chain } from "./generated/grpc-web/encrypt_service";
++import { EncryptServiceClient } from "./generated/grpc-web/encrypt_service.client.js";
++import { Chain } from "./generated/grpc-web/encrypt_service.js";
++export { Chain } from "./generated/grpc-web/encrypt_service.js";
+ /**
+  * Create a browser gRPC-Web client for the Encrypt executor.
+  *
+diff --git a/dist/grpc.js b/dist/grpc.js
+index bbc5898dfe5b83d25320365b1126df878fa6ccb3..003a9b8d6bf2b2391b19b3fc7f6b4d1b4cbc7687 100644
+--- a/dist/grpc.js
++++ b/dist/grpc.js
+@@ -6,8 +6,8 @@
+  */
+ import * as grpc from "@grpc/grpc-js";
+ // Re-export generated types
+-export {} from "./generated/grpc/encrypt_service";
+-import { Chain as ProtoChain, EncryptServiceClient as GrpcClient, } from "./generated/grpc/encrypt_service";
++export {} from "./generated/grpc/encrypt_service.js";
++import { Chain as ProtoChain, EncryptServiceClient as GrpcClient, } from "./generated/grpc/encrypt_service.js";
+ /** Chain identifier (matches proto enum, camelCase for ergonomics). */
+ export const Chain = {
+     Solana: ProtoChain.SOLANA,
+diff --git a/package.json b/package.json
+index efb8c623675734d07f4622d6e4473d73db3e26e2..0401f88f7da630eda3ec883a930e518871c9378d 100644
+--- a/package.json
++++ b/package.json
+@@ -6,9 +6,18 @@
+   "type": "module",
+   "module": "src/generated/index.js",
+   "exports": {
+-    ".": "./src/generated/index.js",
+-    "./grpc": "./src/grpc.ts",
+-    "./grpc-web": "./src/grpc-web.ts"
++    ".": {
++      "types": "./dist/generated/index.d.ts",
++      "import": "./dist/generated/index.js"
++    },
++    "./grpc": {
++      "types": "./dist/grpc.d.ts",
++      "import": "./dist/grpc.js"
++    },
++    "./grpc-web": {
++      "types": "./dist/grpc-web.d.ts",
++      "import": "./dist/grpc-web.js"
++    }
+   },
+   "scripts": {
+     "generate": "mkdir -p src/generated/grpc-web src/generated/grpc && protoc --plugin=./node_modules/.bin/protoc-gen-ts --ts_out=src/generated/grpc-web --proto_path=../../../../proto ../../../../proto/encrypt_service.proto && protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=src/generated/grpc --ts_proto_opt=outputServices=grpc-js,esModuleInterop=true --proto_path=../../../../proto ../../../../proto/encrypt_service.proto",
+@@ -32,5 +41,7 @@
+     "@solana/kit": "^6.4",
+     "@solana/program-client-core": "^6.4",
+     "typescript": "^5"
+-  }
++  },
++  "main": "./dist/generated/index.js",
++  "types": "./dist/generated/index.d.ts"
+ }
