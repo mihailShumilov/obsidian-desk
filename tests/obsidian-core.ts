@@ -1,10 +1,10 @@
-import * as anchor from '@coral-xyz/anchor';
 import type { Program } from '@coral-xyz/anchor';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import BN from 'bn.js';
 import { expect } from 'chai';
 import { randomBytes } from 'node:crypto';
 import type { ObsidianCore } from '../target/types/obsidian_core';
+import { setupConfirmedProvider } from './_setup.ts';
 
 /**
  * Pull the typed events emitted by a confirmed tx out of its logs.
@@ -35,21 +35,7 @@ async function eventsFor<T extends Record<string, unknown>>(
 }
 
 describe('obsidian-core', () => {
-  // Build the provider explicitly with `confirmed` everywhere — `processed`
-  // (anchor's default) returns blockhashes the validator hasn't finalized yet,
-  // which trips a "Blockhash not found" preflight failure on the first tx
-  // after a fresh validator start.
-  const envProvider = anchor.AnchorProvider.env();
-  const connection = new anchor.web3.Connection(
-    envProvider.connection.rpcEndpoint,
-    'confirmed',
-  );
-  const provider = new anchor.AnchorProvider(connection, envProvider.wallet, {
-    commitment: 'confirmed',
-    preflightCommitment: 'confirmed',
-  });
-  anchor.setProvider(provider);
-  const program = anchor.workspace.obsidianCore as Program<ObsidianCore>;
+  const { provider, program } = setupConfirmedProvider();
 
   const baseMint = Keypair.generate().publicKey;
   const quoteMint = Keypair.generate().publicKey;

@@ -1,10 +1,7 @@
-import * as anchor from '@coral-xyz/anchor';
-import type { Program } from '@coral-xyz/anchor';
-import { Keypair, PublicKey } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 import BN from 'bn.js';
 import { expect } from 'chai';
 import { randomBytes } from 'node:crypto';
-import { createHash } from 'node:crypto';
 // Use the SOURCE files via relative paths so all in-test SDK calls go
 // through the same module instance (and therefore the same ika mockStore).
 // pollOnce accepts an `ikaSdk` / `btcSdk` override so the keeper uses
@@ -12,10 +9,13 @@ import { createHash } from 'node:crypto';
 import { CT_ID_LEN, encryptOrder } from '../sdk/src/encrypt.ts';
 import * as ikaSdk from '../sdk/src/ika.ts';
 import * as btcSdk from '../sdk/src/btc.ts';
-import type { SpendInput } from '../sdk/src/btc.ts';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../sdk/src/slots.ts';
 import { pollOnce } from '../keeper/src/poll.ts';
-import type { ObsidianCore } from '../target/types/obsidian_core';
+import {
+  bootstrapFreshMarket,
+  mockUtxoProvider,
+  setupConfirmedProvider,
+} from './_setup.ts';
 
 /**
  * P4 e2e: full mock settlement flow.
@@ -33,22 +33,7 @@ import type { ObsidianCore } from '../target/types/obsidian_core';
  * provider synthesizes a deterministic input per dWallet address.
  */
 describe('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
-  const envProvider = anchor.AnchorProvider.env();
-  const connection = new anchor.web3.Connection(
-    envProvider.connection.rpcEndpoint,
-    'confirmed',
-  );
-  const provider = new anchor.AnchorProvider(connection, envProvider.wallet, {
-    commitment: 'confirmed',
-    preflightCommitment: 'confirmed',
-  });
-  anchor.setProvider(provider);
-  const program = anchor.workspace.obsidianCore as Program<ObsidianCore>;
-
-  const baseMint = Keypair.generate().publicKey;
-  const quoteMint = Keypair.generate().publicKey;
-  const settleVault = Keypair.generate().publicKey;
-  const ikaPolicy = Keypair.generate().publicKey;
+  const { provider, program } = setupConfirmedProvider();
 
   let market: PublicKey;
 
@@ -56,19 +41,7 @@ describe('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
     process.env['OBSIDIAN_ENCRYPT_MODE'] = 'mock';
     process.env['OBSIDIAN_IKA_MODE'] = 'mock';
     ikaSdk._mockReset();
-    [market] = PublicKey.findProgramAddressSync(
-      [Buffer.from('market'), baseMint.toBuffer(), quoteMint.toBuffer()],
-      program.programId,
-    );
-    await program.methods
-      .initializeMarket(baseMint, quoteMint)
-      .accountsPartial({
-        market,
-        settleVault,
-        ikaPolicy,
-        admin: provider.wallet.publicKey,
-      })
-      .rpc({ commitment: 'confirmed' });
+    ({ market } = await bootstrapFreshMarket(program, provider.wallet.publicKey));
   });
 
   it('runs the full submit → match → request_settlement → finalize loop', async () => {
@@ -177,17 +150,6 @@ describe('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
     expect(pending.buyerDwallet.toBase58()).to.eq(bobDwPk.toBase58());
 
     // ── 4. Keeper run ───────────────────────────────────────────────────
-    const mockUtxoProvider = (address: string): SpendInput => {
-      const h = createHash('sha256').update(address).digest('hex');
-      return {
-        txid: h,
-        vout: 0,
-        valueSats: 100_000_000n, // 1 BTC mock UTXO
-        // Real script for `address` so requestSign's PSBT signing works.
-        scriptPubKeyHex: btcSdk.scriptForAddress(address, 'signet'),
-      };
-    };
-
     // The validator persists state across test runs, so there may be
     // stale MatchRecords from prior failed runs. We only assert that OUR
     // matchRecord (the one this test just created) flows correctly through

@@ -1,16 +1,16 @@
-import * as anchor from '@coral-xyz/anchor';
-import type { Program } from '@coral-xyz/anchor';
-import { Keypair, PublicKey } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 import BN from 'bn.js';
 import { expect } from 'chai';
-import { createHash } from 'node:crypto';
 import { encryptOrder } from '../sdk/src/encrypt.ts';
 import * as ikaSdk from '../sdk/src/ika.ts';
 import * as btcSdk from '../sdk/src/btc.ts';
-import type { SpendInput } from '../sdk/src/btc.ts';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '../sdk/src/slots.ts';
 import { pollOnce } from '../keeper/src/poll.ts';
-import type { ObsidianCore } from '../target/types/obsidian_core';
+import {
+  bootstrapFreshMarket,
+  mockUtxoProvider,
+  setupConfirmedProvider,
+} from './_setup.ts';
 
 /**
  * P9 e2e: full happy-path Alice (bid) ⇄ Bob (ask) loop, mock mode.
@@ -33,24 +33,7 @@ import type { ObsidianCore } from '../target/types/obsidian_core';
  * --grep` only the deterministic mock variant.
  */
 describe('e2e:full — Alice + Bob → two matches → one keeper pass settles both', () => {
-  const envProvider = anchor.AnchorProvider.env();
-  const connection = new anchor.web3.Connection(
-    envProvider.connection.rpcEndpoint,
-    'confirmed',
-  );
-  const provider = new anchor.AnchorProvider(connection, envProvider.wallet, {
-    commitment: 'confirmed',
-    preflightCommitment: 'confirmed',
-  });
-  anchor.setProvider(provider);
-  const program = anchor.workspace.obsidianCore as Program<ObsidianCore>;
-
-  // Use unique mints per run so the market PDA is fresh — avoids stale
-  // active_orders heads from prior tests.
-  const baseMint = Keypair.generate().publicKey;
-  const quoteMint = Keypair.generate().publicKey;
-  const settleVault = Keypair.generate().publicKey;
-  const ikaPolicy = Keypair.generate().publicKey;
+  const { provider, program } = setupConfirmedProvider();
 
   let market: PublicKey;
 
@@ -58,20 +41,7 @@ describe('e2e:full — Alice + Bob → two matches → one keeper pass settles b
     process.env['OBSIDIAN_ENCRYPT_MODE'] = 'mock';
     process.env['OBSIDIAN_IKA_MODE'] = 'mock';
     ikaSdk._mockReset();
-
-    [market] = PublicKey.findProgramAddressSync(
-      [Buffer.from('market'), baseMint.toBuffer(), quoteMint.toBuffer()],
-      program.programId,
-    );
-    await program.methods
-      .initializeMarket(baseMint, quoteMint)
-      .accountsPartial({
-        market,
-        settleVault,
-        ikaPolicy,
-        admin: provider.wallet.publicKey,
-      })
-      .rpc({ commitment: 'confirmed' });
+    ({ market } = await bootstrapFreshMarket(program, provider.wallet.publicKey));
   });
 
   it('settles both Alice/Bob legs in a single keeper pass', async () => {
@@ -207,16 +177,6 @@ describe('e2e:full — Alice + Bob → two matches → one keeper pass settles b
     }
 
     // ── 4. Single keeper pass settles both ─────────────────────────────
-    const mockUtxoProvider = (address: string): SpendInput => {
-      const h = createHash('sha256').update(address).digest('hex');
-      return {
-        txid: h,
-        vout: 0,
-        valueSats: 100_000_000n,
-        scriptPubKeyHex: btcSdk.scriptForAddress(address, 'signet'),
-      };
-    };
-
     const ourSet = new Set(matchRecords.map((m) => m.toBase58()));
     const report = await pollOnce(program as never, {
       keeperId: 'e2e-full',

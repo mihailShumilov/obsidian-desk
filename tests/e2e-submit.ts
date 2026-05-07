@@ -1,5 +1,3 @@
-import * as anchor from '@coral-xyz/anchor';
-import type { Program } from '@coral-xyz/anchor';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import BN from 'bn.js';
 import { expect } from 'chai';
@@ -8,47 +6,22 @@ import {
   encryptOrder,
   requestThresholdDecrypt,
 } from '../sdk/src/encrypt.ts';
-import type { ObsidianCore } from '../target/types/obsidian_core';
+import * as ikaSdk from '../sdk/src/ika.ts';
+import { bootstrapFreshMarket, setupConfirmedProvider } from './_setup.ts';
 
 /**
  * P3 e2e: encrypt an order client-side (mock mode), submit to the program,
  * read it back, assert the on-chain ciphertext bytes equal the SDK output.
  */
 describe('e2e: encrypt → submit_order → read-back', () => {
-  const envProvider = anchor.AnchorProvider.env();
-  const connection = new anchor.web3.Connection(
-    envProvider.connection.rpcEndpoint,
-    'confirmed',
-  );
-  const provider = new anchor.AnchorProvider(connection, envProvider.wallet, {
-    commitment: 'confirmed',
-    preflightCommitment: 'confirmed',
-  });
-  anchor.setProvider(provider);
-  const program = anchor.workspace.obsidianCore as Program<ObsidianCore>;
-
-  const baseMint = Keypair.generate().publicKey;
-  const quoteMint = Keypair.generate().publicKey;
-  const settleVault = Keypair.generate().publicKey;
-  const ikaPolicy = Keypair.generate().publicKey;
+  const { provider, program } = setupConfirmedProvider();
 
   let market: PublicKey;
 
   before(async () => {
     process.env['OBSIDIAN_ENCRYPT_MODE'] = 'mock';
-    [market] = PublicKey.findProgramAddressSync(
-      [Buffer.from('market'), baseMint.toBuffer(), quoteMint.toBuffer()],
-      program.programId,
-    );
-    await program.methods
-      .initializeMarket(baseMint, quoteMint)
-      .accountsPartial({
-        market,
-        settleVault,
-        ikaPolicy,
-        admin: provider.wallet.publicKey,
-      })
-      .rpc({ commitment: 'confirmed' });
+    ikaSdk._mockReset();
+    ({ market } = await bootstrapFreshMarket(program, provider.wallet.publicKey));
   });
 
   it('round-trips an encrypted bid through the program', async () => {
