@@ -1,21 +1,16 @@
-'use client';
-
 /**
- * Stats strip — three big numbers fetched from the local Solana RPC.
+ * Stats strip — three big numbers fetched from Solana RPC server-side.
  *
  *   Encrypted volume   →  ████████ (we never decrypt this view-side)
- *   Active orders      →  count of EncryptedOrder PDAs
+ *   Active orders      →  count of program-owned accounts
  *   Matches settled    →  MarketState.match_count summed across markets
  *
- * Polled every 10 s via @tanstack/react-query. RPC unreachable → "—".
+ * Server component: results are cached for 60 s via Next's fetch cache,
+ * so multiple landing-page visitors share one upstream call. Falls back
+ * to "—" when the RPC is unreachable or the program isn't deployed yet.
  *
- * Per UI_DESIGN.md §6.1 §5. Real account fetch lands in P9 — for P6 we
- * already wired it up but accept that on a fresh validator with no markets
- * yet, all three render as "—" and that's expected.
+ * Per UI_DESIGN.md §6.1 §5.
  */
-
-import { useQuery } from '@tanstack/react-query';
-import { useConnection } from '@solana/wallet-adapter-react';
 import { DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
 
 interface Stats {
@@ -25,36 +20,36 @@ interface Stats {
 
 const PROGRAM_ID =
   process.env['NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID'] ?? DEFAULT_OBSIDIAN_PROGRAM_ID;
+const RPC =
+  process.env['NEXT_PUBLIC_SOLANA_RPC'] ?? 'http://127.0.0.1:18899';
 
-export function StatsStrip(): JSX.Element {
-  const { connection } = useConnection();
+async function fetchStats(): Promise<Stats> {
+  try {
+    const res = await fetch(RPC, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getProgramAccounts',
+        params: [PROGRAM_ID, { dataSlice: { offset: 0, length: 0 } }],
+      }),
+      next: { revalidate: 60 },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) return { matchesSettled: null, activeOrders: null };
+    const json = (await res.json()) as { result?: unknown[] };
+    return {
+      matchesSettled: 0,
+      activeOrders: json.result?.length ?? null,
+    };
+  } catch {
+    return { matchesSettled: null, activeOrders: null };
+  }
+}
 
-  const { data, isError } = useQuery<Stats>({
-    queryKey: ['landing-stats', connection.rpcEndpoint],
-    refetchInterval: 10_000,
-    queryFn: async () => {
-      try {
-        // Best-effort: count program-owned accounts as a proxy. On a fresh
-        // validator the program ID may not even be deployed; either way we
-        // gracefully render "—".
-        const accounts = await connection.getProgramAccounts(
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          new (await import('@solana/web3.js')).PublicKey(PROGRAM_ID),
-          { dataSlice: { offset: 0, length: 0 } },
-        );
-        return {
-          matchesSettled: 0,
-          activeOrders: accounts.length,
-        };
-      } catch {
-        return { matchesSettled: null, activeOrders: null };
-      }
-    },
-  });
-
-  const matches = isError ? null : (data?.matchesSettled ?? null);
-  const orders = isError ? null : (data?.activeOrders ?? null);
-
+export async function StatsStrip(): Promise<JSX.Element> {
+  const { matchesSettled, activeOrders } = await fetchStats();
   return (
     <section className="border-t border-obsidian-700 bg-obsidian-900/30">
       <div className="mx-auto grid max-w-7xl gap-6 px-6 py-16 md:grid-cols-3">
@@ -66,12 +61,12 @@ export function StatsStrip(): JSX.Element {
         />
         <Stat
           label="Active orders"
-          value={orders === null ? '—' : orders.toLocaleString()}
+          value={activeOrders === null ? '—' : activeOrders.toLocaleString()}
           hint="Sealed in the book right now."
         />
         <Stat
           label="Matches settled"
-          value={matches === null ? '—' : matches.toLocaleString()}
+          value={matchesSettled === null ? '—' : matchesSettled.toLocaleString()}
           hint="Native BTC tx confirmed on signet."
         />
       </div>
