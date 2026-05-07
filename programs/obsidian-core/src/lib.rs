@@ -23,6 +23,9 @@
 //! on the upstream Anchor v1 toolchain skew).
 
 use anchor_lang::prelude::*;
+use encrypt_anchor::EncryptContext;
+use encrypt_dsl::prelude::encrypt_fn;
+use encrypt_dsl::prelude::*;
 
 pub mod encrypt_cpi;
 pub mod errors;
@@ -34,6 +37,39 @@ use events::*;
 use state::*;
 
 declare_id!("H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp");
+
+/// FHE matching graph (gap E2 closure).
+///
+/// Inputs: each order's encrypted side / price / size (`a_*`, `b_*`).
+/// Side encoding: `0 = bid, 1 = ask` (EBool).
+///
+/// Outputs:
+/// - `can_match`: opposite sides AND bid_price >= ask_price.
+/// - `fill_size`: `min(a_size, b_size)`.
+/// - `clearing_price`: midpoint `(a_price + b_price) / 2`.
+///
+/// Compiled at build time by `#[encrypt_fn]` into a serialized graph; the
+/// proc-macro also emits a CPI wrapper `ctx.match_orders_graph(in1..in6, out1..out3)`
+/// on `EncryptContext` that we call from `try_match`.
+#[encrypt_fn]
+fn match_orders_graph(
+    a_side: EBool,
+    a_price: EUint64,
+    a_size: EUint64,
+    b_side: EBool,
+    b_price: EUint64,
+    b_size: EUint64,
+) -> (EBool, EUint64, EUint64) {
+    let opp = a_side ^ b_side;
+    let a_is_bid = !a_side;
+    let bid_price = if a_is_bid { a_price } else { b_price };
+    let ask_price = if a_is_bid { b_price } else { a_price };
+    let crosses = bid_price >= ask_price;
+    let can_match = opp & crosses;
+    let fill = a_size.min(b_size);
+    let clearing = (a_price + b_price) / 2u64;
+    (can_match, fill, clearing)
+}
 
 #[program]
 pub mod obsidian_core {
@@ -127,20 +163,26 @@ pub mod obsidian_core {
         Ok(())
     }
 
-    /// Snapshot two orders and three keeper-supplied output ciphertext refs
-    /// into a `MatchIntent`. The output refs SHOULD be produced by an
-    /// `execute_graph` CPI in production (gap E2); for the scaffold the
-    /// keeper computes them off-chain via `mock_match_outputs` and passes
-    /// them in. Either way the on-chain program never sees plaintexts.
+    /// Run the FHE matching comparator on-chain via `execute_graph` CPI to
+    /// the deployed Encrypt program. Closes gap E2.
+    ///
+    /// Verifies the six input Ciphertext-account pubkeys passed via
+    /// `accountsPartial` match the refs stored on the two `EncryptedOrder`s,
+    /// invokes `match_orders_graph`, snapshots the three output ciphertext
+    /// pubkeys (allocated by the keeper as fresh Encrypt Ciphertext keypair
+    /// accounts) onto `MatchIntent`. The program never sees any plaintext.
+    ///
+    /// `cpi_authority_bump` is the bump for the `__encrypt_cpi_authority`
+    /// PDA seeded under our program id; the keeper computes it client-side
+    /// via `findProgramAddressSync` and passes it through.
     pub fn try_match(
         ctx: Context<TryMatch>,
         match_id: u64,
-        can_match_ct: [u8; CT_REF_LEN],
-        fill_size_ct: [u8; CT_REF_LEN],
-        clearing_price_ct: [u8; CT_REF_LEN],
+        cpi_authority_bump: u8,
     ) -> Result<()> {
-        let market = &mut ctx.accounts.market;
-        let next_id = market
+        let next_id = ctx
+            .accounts
+            .market
             .match_count
             .checked_add(1)
             .ok_or(ErrorCode::ArithmeticOverflow)?;
@@ -156,16 +198,72 @@ pub mod obsidian_core {
         require!(order_a.expiry_slot > clock.slot, ErrorCode::OrderExpired);
         require!(order_b.expiry_slot > clock.slot, ErrorCode::OrderExpired);
 
-        market.match_count = next_id;
+        // Verify each input Ciphertext-account pubkey matches what's stored
+        // on the order so the keeper can't substitute foreign ciphertexts.
+        require!(
+            ctx.accounts.a_side_ct.key().to_bytes() == order_a.side_ct,
+            ErrorCode::CiphertextRefMismatch,
+        );
+        require!(
+            ctx.accounts.a_price_ct.key().to_bytes() == order_a.price_ct,
+            ErrorCode::CiphertextRefMismatch,
+        );
+        require!(
+            ctx.accounts.a_size_ct.key().to_bytes() == order_a.size_ct,
+            ErrorCode::CiphertextRefMismatch,
+        );
+        require!(
+            ctx.accounts.b_side_ct.key().to_bytes() == order_b.side_ct,
+            ErrorCode::CiphertextRefMismatch,
+        );
+        require!(
+            ctx.accounts.b_price_ct.key().to_bytes() == order_b.price_ct,
+            ErrorCode::CiphertextRefMismatch,
+        );
+        require!(
+            ctx.accounts.b_size_ct.key().to_bytes() == order_b.size_ct,
+            ErrorCode::CiphertextRefMismatch,
+        );
 
+        // Build the EncryptContext and dispatch the compiled graph CPI.
+        let encrypt_ctx = EncryptContext {
+            encrypt_program: ctx.accounts.encrypt_program.to_account_info(),
+            config: ctx.accounts.encrypt_config.to_account_info(),
+            deposit: ctx.accounts.encrypt_deposit.to_account_info(),
+            cpi_authority: ctx.accounts.encrypt_cpi_authority.to_account_info(),
+            caller_program: ctx.accounts.caller_program.to_account_info(),
+            network_encryption_key: ctx
+                .accounts
+                .encrypt_network_key
+                .to_account_info(),
+            payer: ctx.accounts.payer.to_account_info(),
+            event_authority: ctx.accounts.encrypt_event_authority.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+            cpi_authority_bump,
+        };
+        encrypt_ctx.match_orders_graph(
+            ctx.accounts.a_side_ct.to_account_info(),
+            ctx.accounts.a_price_ct.to_account_info(),
+            ctx.accounts.a_size_ct.to_account_info(),
+            ctx.accounts.b_side_ct.to_account_info(),
+            ctx.accounts.b_price_ct.to_account_info(),
+            ctx.accounts.b_size_ct.to_account_info(),
+            ctx.accounts.can_match_out.to_account_info(),
+            ctx.accounts.fill_size_out.to_account_info(),
+            ctx.accounts.clearing_price_out.to_account_info(),
+        )?;
+
+        // Persist results to MatchIntent.
+        ctx.accounts.market.match_count = next_id;
+        let market_key = ctx.accounts.market.key();
         let intent = &mut ctx.accounts.match_intent;
-        intent.market = market.key();
+        intent.market = market_key;
         intent.match_id = next_id;
         intent.order_a = order_a.key();
         intent.order_b = order_b.key();
-        intent.can_match_ct = can_match_ct;
-        intent.fill_size_ct = fill_size_ct;
-        intent.clearing_price_ct = clearing_price_ct;
+        intent.can_match_ct = ctx.accounts.can_match_out.key().to_bytes();
+        intent.fill_size_ct = ctx.accounts.fill_size_out.key().to_bytes();
+        intent.clearing_price_ct = ctx.accounts.clearing_price_out.key().to_bytes();
         intent.can_match_digest = [0u8; 32];
         intent.fill_size_digest = [0u8; 32];
         intent.clearing_price_digest = [0u8; 32];
@@ -173,7 +271,7 @@ pub mod obsidian_core {
         intent.bump = ctx.bumps.match_intent;
 
         emit!(MatchProposed {
-            market: market.key(),
+            market: market_key,
             match_intent: intent.key(),
             match_id: next_id,
             order_a: order_a.key(),
@@ -447,11 +545,11 @@ pub struct CancelOrder<'info> {
 #[instruction(match_id: u64)]
 pub struct TryMatch<'info> {
     #[account(mut, has_one = keeper_authority)]
-    pub market: Account<'info, MarketState>,
+    pub market: Box<Account<'info, MarketState>>,
     #[account(has_one = market)]
-    pub order_a: Account<'info, EncryptedOrder>,
+    pub order_a: Box<Account<'info, EncryptedOrder>>,
     #[account(has_one = market)]
-    pub order_b: Account<'info, EncryptedOrder>,
+    pub order_b: Box<Account<'info, EncryptedOrder>>,
     #[account(
         init,
         payer = payer,
@@ -459,7 +557,51 @@ pub struct TryMatch<'info> {
         seeds = [b"match_intent", market.key().as_ref(), &match_id.to_le_bytes()],
         bump,
     )]
-    pub match_intent: Account<'info, MatchIntent>,
+    pub match_intent: Box<Account<'info, MatchIntent>>,
+
+    // ── Input ciphertext accounts (owned by Encrypt program) ──
+    /// CHECK: order_a.side_ct — verified manually inside the handler.
+    pub a_side_ct: UncheckedAccount<'info>,
+    /// CHECK: order_a.price_ct — verified manually.
+    pub a_price_ct: UncheckedAccount<'info>,
+    /// CHECK: order_a.size_ct — verified manually.
+    pub a_size_ct: UncheckedAccount<'info>,
+    /// CHECK: order_b.side_ct — verified manually.
+    pub b_side_ct: UncheckedAccount<'info>,
+    /// CHECK: order_b.price_ct — verified manually.
+    pub b_price_ct: UncheckedAccount<'info>,
+    /// CHECK: order_b.size_ct — verified manually.
+    pub b_size_ct: UncheckedAccount<'info>,
+
+    // ── Output ciphertext accounts (fresh keypair accounts the Encrypt
+    //     program initialises during execute_graph). ──
+    /// CHECK: keeper-allocated output ciphertext for can_match (EBool).
+    #[account(mut)]
+    pub can_match_out: UncheckedAccount<'info>,
+    /// CHECK: keeper-allocated output ciphertext for fill_size (EUint64).
+    #[account(mut)]
+    pub fill_size_out: UncheckedAccount<'info>,
+    /// CHECK: keeper-allocated output ciphertext for clearing_price (EUint64).
+    #[account(mut)]
+    pub clearing_price_out: UncheckedAccount<'info>,
+
+    // ── EncryptContext accounts (Encrypt program CPI plumbing) ──
+    /// CHECK: deployed Encrypt program (4ebfzW…ND8 on devnet).
+    pub encrypt_program: UncheckedAccount<'info>,
+    /// CHECK: Encrypt program config PDA.
+    pub encrypt_config: UncheckedAccount<'info>,
+    /// CHECK: Encrypt program deposit account (rent payer for output cts).
+    #[account(mut)]
+    pub encrypt_deposit: UncheckedAccount<'info>,
+    /// CHECK: CPI authority PDA seeded under our program id.
+    pub encrypt_cpi_authority: UncheckedAccount<'info>,
+    /// CHECK: Caller program (this program's id, used for ACL).
+    pub caller_program: UncheckedAccount<'info>,
+    /// CHECK: Encrypt network encryption key account.
+    pub encrypt_network_key: UncheckedAccount<'info>,
+    /// CHECK: Encrypt event authority PDA.
+    pub encrypt_event_authority: UncheckedAccount<'info>,
+
     /// Keeper-only: matching authority is the same key that gates settlement.
     pub keeper_authority: Signer<'info>,
     #[account(mut)]

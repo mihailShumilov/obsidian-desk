@@ -1,0 +1,6 @@
+[toolchain]
+# Anchor 1.0+ + encrypt-anchor target Rust 1.94 (matches upstream
+# encrypt-pre-alpha rust-toolchain.toml). Older toolchains miss edition 2024
+# stabilizations the upstream proc-macros depend on.
+channel = "1.94"
+components = ["clippy", "rustfmt"]

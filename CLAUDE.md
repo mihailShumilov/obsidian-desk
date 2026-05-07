@@ -17,7 +17,10 @@ Before generating ANY code, re-read the relevant prompt from docs/PROMPTS.md and
 
 ## Pinned versions
 - Node.js 24 LTS, pnpm 9+
-- Rust 1.93 stable, Anchor 0.31+
+- Rust **1.94** stable (pinned via `rust-toolchain.toml`); Anchor **1.0.2** (`avm install 1.0.2 && avm use 1.0.2`).
+  - The program depends on `encrypt-anchor` from `dwallet-labs/encrypt-pre-alpha` which requires Anchor 1.x; the JS side stays on `@coral-xyz/anchor@^0.32.1` because no v1 JS SDK has shipped yet — 0.32.1 parses the v1 IDL cleanly for our usage (verified by `anchor test` against local validator).
+  - `programs/obsidian-core/Cargo.toml` is on `edition = "2021"` (not `"2024"` like upstream) because anchor-cli 1.0.2's manifest parser doesn't yet recognise `2024`.
+  - `Anchor.toml` no longer carries `[toolchain] anchor_version` — that field was removed in v1; anchor-cli uses whichever binary is on `$PATH`.
 - Solana CLI latest via Anza installer (Agave), solana-validator image: anzaxyz/agave:latest
 - Next.js 16.2 (App Router, output: "standalone"), React 19.1+, TypeScript 5.9 strict
   - Next 16 ships React 19.3-canary to the client regardless of the app's declared `react` version. The app MUST be on React 19 — with React 18 declared, `react-reconciler@0.27.0` (pulled by `@react-three/fiber` v8) tries to read `React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentBatchConfig`, which React 19 renamed away, and the whole client crashes to "This page couldn't load".

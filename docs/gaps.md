@@ -31,23 +31,40 @@ gRPC `createInput` and returns 3 fresh on-chain ciphertext-account
 identifiers; `submit_order` accepts those refs directly. `MatchIntent` also
 holds the 3 keeper-supplied output ct refs from `try_match`.
 
-### E2. `enc_xor / enc_gte / enc_min` primitives don't exist — **PARTIALLY CLOSED**
-**State (2026-05-07):** the four mock functions in `encrypt_cpi.rs` are gone.
-`try_match` now takes the three output ciphertext refs (`can_match_ct`,
-`fill_size_ct`, `clearing_price_ct`) as **instruction arguments**, computed
-off-chain by the keeper via gRPC `createInput`. The on-chain program never
-sees plaintext — it just records the refs and verifies digests at
-`request_decryption` time.
+### E2. ~~`enc_xor / enc_gte / enc_min` primitives don't exist~~ — **CLOSED**
+**State (2026-05-07):** ObsidianDesk migrated to Anchor 1.0.2 (Rust 1.94)
+and pulled in `encrypt-anchor` + `encrypt-solana-dsl` from
+`dwallet-labs/encrypt-pre-alpha` (commit `dadfff8`).
 
-**What's left:** moving the FHE comparator from the keeper back on-chain
-via `execute_graph` CPI. That's the production trust model — the program
-should derive output ciphertexts itself from the input order ciphertexts,
-not trust the keeper to pick them. Closure requires:
-1. `#[encrypt_fn] match_orders(a_side, a_price, a_size, b_side, b_price, b_size) -> (EBool, EUint64, EUint64)` Rust DSL.
-2. The `encrypt-anchor` crate from `dwallet-labs/encrypt-pre-alpha` wired into Cargo.toml.
-3. **Blocker**: upstream `encrypt-anchor` requires `anchor-lang = 1` + `edition = 2024` + Rust 1.94, while ObsidianDesk is on `anchor-lang = 0.32.1` + `edition = 2021`. Either upgrade ObsidianDesk to Anchor 1 (multi-day, breaking-change minefield) or vendor + adapt ~5000 LOC of upstream crates for Anchor 0.32.
+`programs/obsidian-core/src/lib.rs` now defines:
 
-Until E2 fully closes, the keeper is privileged to compute matches off-chain. The keeper-authority gating on `try_match` (added with this refactor) limits this trust to the same key that gates settlement.
+```rust
+#[encrypt_fn]
+fn match_orders_graph(
+    a_side: EBool, a_price: EUint64, a_size: EUint64,
+    b_side: EBool, b_price: EUint64, b_size: EUint64,
+) -> (EBool, EUint64, EUint64) {
+    let opp = a_side ^ b_side;
+    let a_is_bid = !a_side;
+    let bid_price = if a_is_bid { a_price } else { b_price };
+    let ask_price = if a_is_bid { b_price } else { a_price };
+    let crosses = bid_price >= ask_price;
+    let can_match = opp & crosses;
+    let fill = a_size.min(b_size);
+    let clearing = (a_price + b_price) / 2u64;
+    (can_match, fill, clearing)
+}
+```
+
+`try_match` builds an `EncryptContext` and dispatches the compiled graph
+via `ctx.match_orders_graph(...)` — a real `execute_graph` CPI to the
+deployed Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8`
+on Solana devnet. On-chain artefacts: 6 input Ciphertext-account pubkeys
+verified against `EncryptedOrder.{side,price,size}_ct`, 3 output
+Ciphertext-account pubkeys allocated by the keeper as fresh keypair
+accounts and snapshotted onto `MatchIntent` after the CPI completes.
+
+The program never sees plaintext.
 
 ### E3. ~~Threshold decrypt is async, not synchronous~~ — **CLOSED**
 The single `request_settlement` instruction has been split into two:
