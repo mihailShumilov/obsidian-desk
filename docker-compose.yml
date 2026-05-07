@@ -70,8 +70,11 @@ services:
       # see the docker-network alias). Keep both vars for completeness:
       # the public one is for the wallet adapter in the browser; the
       # docker-internal one is for any future server-side RPC calls.
+      # Default to host.docker.internal:18899 so the stack works without
+      # the `local-rpc` profile (Mac/Apple-silicon path); override to
+      # http://solana-validator:8899 when running with --profile local-rpc.
       NEXT_PUBLIC_SOLANA_RPC: http://127.0.0.1:18899
-      SOLANA_RPC: http://solana-validator:8899
+      SOLANA_RPC: ${SOLANA_INTERNAL_RPC:-http://host.docker.internal:18899}
       NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID: H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
       NEXT_PUBLIC_NETWORK: devnet
       OBSIDIAN_ESPLORA_URL: https://mempool.space/signet/api
@@ -84,6 +87,10 @@ services:
     # without the profile blocks forever waiting for it. Users who do
     # `--profile local-rpc up` get the validator + the dependency
     # ordering benefit; everyone else points at a host-side validator.
+    extra_hosts:
+      # Make `host.docker.internal` resolve on Linux too (it's native on
+      # Docker Desktop). Required for the host-validator default above.
+      - 'host.docker.internal:host-gateway'
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health']
@@ -99,7 +106,10 @@ services:
     image: obsidian-keeper:dev
     container_name: obsidian-keeper
     environment:
-      ANCHOR_PROVIDER_URL: http://solana-validator:8899
+      # Default to host.docker.internal:18899 (host-side validator, the
+      # documented Mac/Apple-silicon path). Override to
+      # http://solana-validator:8899 when running with --profile local-rpc.
+      ANCHOR_PROVIDER_URL: ${SOLANA_INTERNAL_RPC:-http://host.docker.internal:18899}
       ANCHOR_WALLET: /run/secrets/keeper_keypair.json
       OBSIDIAN_PROGRAM_ID: H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
       OBSIDIAN_IKA_MODE: mock
@@ -109,6 +119,8 @@ services:
     ports:
       - '13001:3001'
     # See app: validator dependency is opt-in via the `local-rpc` profile.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     restart: unless-stopped
     secrets:
       - keeper_keypair.json
