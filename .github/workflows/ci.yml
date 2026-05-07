@@ -70,4 +70,8 @@ jobs:
       - name: anchor build
         # `--no-idl` so the BPF compile completes before we try to extract
         # the IDL; v1's IDL build is a separate `anchor idl build` step.
-        run: anchor build --no-idl
+        # `--ignore-keys` because the program keypair file is per-developer
+        # (gitignored) — the source-of-truth program id is the `declare_id!`
+        # in lib.rs which matches the deployed devnet/localnet entries in
+        # Anchor.toml.
+        run: anchor build --no-idl --ignore-keys
