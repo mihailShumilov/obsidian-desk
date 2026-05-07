@@ -172,8 +172,13 @@ export function FounderSlide({
             </div>
           </motion.div>
 
-          {/* Right: bio + stats + timeline */}
-          <div className="flex flex-col gap-10">
+          {/* Right: bio + stats + timeline.
+              `min-w-0` lets the column shrink below the timeline's
+              `min-w-max` content — without it, the 7×w-56 timeline
+              (≈1664px) blows the grid out, squashes the cipher card
+              column to a sliver, and pushes the right-edge into the
+              fixed StageIndicator rail. */}
+          <div className="flex min-w-0 flex-col gap-10">
             <motion.p
               initial={{ y: 16 }}
               whileInView={{ opacity: 1, y: 0 }}
