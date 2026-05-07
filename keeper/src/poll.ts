@@ -7,10 +7,25 @@
  */
 
 import BN from 'bn.js';
-import type { Program } from '@coral-xyz/anchor';
+import { utils, type Program } from '@coral-xyz/anchor';
 import type { PublicKey } from '@solana/web3.js';
 import { btc as btcSdkDefault, type SpendInput } from '@obsidian-desk/sdk';
 import type { LooseProgramMethods } from './anchor-shims.ts';
+
+/**
+ * Byte offset of `settle_status` inside a Borsh-serialized `MatchRecord`:
+ *   8 (discriminator) + 32 (market) + 8 (match_id) + 32 (order_a) +
+ *   32 (order_b) + 32 (seller_dwallet) + 32 (buyer_dwallet) +
+ *   8 (fill_size_decrypted) + 8 (clearing_price_decrypted) = 192.
+ *
+ * `SettleStatus::Pending` is variant 0 → 1-byte tag = 0x00. A getProgramAccounts
+ * memcmp filter on this byte makes the keeper skip historical Settled / Failed
+ * records server-side instead of decoding them every tick.
+ */
+const SETTLE_STATUS_OFFSET = 192;
+const SETTLE_STATUS_PENDING_BYTES = utils.bytes.bs58.encode(
+  Buffer.from([0]),
+);
 
 // SDK namespaces are passed in via PollOptions so callers can inject the
 // SAME module instance they used to set up dWallets. Default to the package
@@ -111,19 +126,33 @@ export async function pollOnce(
 
   // `program.account.<name>.all()` is dynamic by IDL — escape into untyped land
   // for the cross-workspace call.
-  const accountClient = (program.account as Record<string, { all(): Promise<unknown> }>)[
-    'matchRecord'
-  ];
+  const accountClient = (program.account as Record<
+    string,
+    {
+      all(
+        filters?: Array<{ memcmp: { offset: number; bytes: string } }>,
+      ): Promise<unknown>;
+    }
+  >)['matchRecord'];
   if (!accountClient) {
     throw new Error('keeper: program IDL has no `matchRecord` account');
   }
-  const records = (await accountClient.all()) as Array<{
+  const records = (await accountClient.all([
+    {
+      memcmp: {
+        offset: SETTLE_STATUS_OFFSET,
+        bytes: SETTLE_STATUS_PENDING_BYTES,
+      },
+    },
+  ])) as Array<{
     publicKey: PublicKey;
     account: StoredMatchRecord;
   }>;
 
   for (const { publicKey, account } of records) {
-    // settle_status is serialized as { pending: {} } etc.
+    // Defense-in-depth: the memcmp filter above has already narrowed the
+    // result set, but a future struct-layout change could shift the offset
+    // and silently let non-pending records through.
     if (!('pending' in account.settleStatus)) continue;
 
     const matchIdStr = account.matchId.toString();
