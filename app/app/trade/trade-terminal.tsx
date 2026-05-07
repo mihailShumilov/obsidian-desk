@@ -12,7 +12,7 @@
  * to show in the debug toast — but we don't submit to chain yet.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { encrypt } from '@obsidian-desk/sdk';
