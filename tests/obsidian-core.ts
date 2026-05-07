@@ -82,7 +82,11 @@ describe('obsidian-core', () => {
     // Mock ciphertexts. Real Encrypt Ciphertext accounts are 100 B (per
     // docs/vendor/encrypt-pre-alpha.md §Reference: Accounts); the inline
     // Vec<u8> we use in the P2 scaffold just needs to be <= CT_MAX = 3000.
-    const sideCt = Buffer.alloc(32);
+    // Byte 24 is the SDK's mock side bit (0=bid, 1=ask) — request_settlement
+    // refuses same-side matches, so order A is bid and order B is ask here.
+    const sideCtBid = Buffer.alloc(32);
+    const sideCtAsk = Buffer.alloc(32);
+    sideCtAsk[24] = 1;
     const priceCt = Buffer.alloc(32);
     const sizeCt = Buffer.alloc(32);
     const dwalletA = Keypair.generate().publicKey;
@@ -101,7 +105,7 @@ describe('obsidian-core', () => {
     );
 
     const submitASig = await program.methods
-      .submitOrder(sideCt, priceCt, sizeCt, expirySlot, [...nonceA] as never, dwalletA)
+      .submitOrder(sideCtBid, priceCt, sizeCt, expirySlot, [...nonceA] as never, dwalletA)
       .accountsPartial({
         market,
         order: orderA,
@@ -115,7 +119,7 @@ describe('obsidian-core', () => {
     );
 
     await program.methods
-      .submitOrder(sideCt, priceCt, sizeCt, expirySlot, [...nonceB] as never, dwalletB)
+      .submitOrder(sideCtAsk, priceCt, sizeCt, expirySlot, [...nonceB] as never, dwalletB)
       .accountsPartial({
         market,
         order: orderB,
@@ -203,8 +207,10 @@ describe('obsidian-core', () => {
     expect(recordState.fillSizeDecrypted.toNumber()).to.eq(10_000_000);
     expect(recordState.clearingPriceDecrypted.eq(new BN('69750000000'))).to.eq(true);
     expect(recordState.settleStatus).to.deep.eq({ pending: {} });
-    expect(recordState.sellerDwallet.toBase58()).to.eq(dwalletA.toBase58());
-    expect(recordState.buyerDwallet.toBase58()).to.eq(dwalletB.toBase58());
+    // Seller = ask side (order B); buyer = bid side (order A) per the FHE
+    // side-decrypt binding in request_settlement.
+    expect(recordState.sellerDwallet.toBase58()).to.eq(dwalletB.toBase58());
+    expect(recordState.buyerDwallet.toBase58()).to.eq(dwalletA.toBase58());
 
     const orderAAfter = await program.account.encryptedOrder.fetch(orderA);
     const orderBAfter = await program.account.encryptedOrder.fetch(orderB);

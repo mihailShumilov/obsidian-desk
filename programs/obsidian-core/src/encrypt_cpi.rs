@@ -97,3 +97,21 @@ pub fn request_threshold_decrypt(
         clearing_price: 69_750_000_000,
     }
 }
+
+/// Mock side decrypt — the program needs a verified bid/ask bit per order
+/// so `request_settlement` can route the BTC tx the right direction
+/// (closes SEC-H-2). Real impl: two `request_decryption` calls on the
+/// `side_ct` ciphertext-account pubkeys.
+///
+/// In mock mode the SDK encodes the u64 plaintext into bytes [24..32] of
+/// the 32-byte ciphertext id (sdk/src/encrypt.ts mockEncrypt). Reading
+/// byte 24 recovers the bid (0) / ask (1) bit deterministically. Buffers
+/// shorter than 25 bytes default to bid so legacy fixtures still work,
+/// but production code paths always use the SDK-produced 32-byte form.
+pub fn mock_decrypt_side(side_ct: &[u8]) -> u64 {
+    debug_assert!(check_len(side_ct));
+    if side_ct.len() <= 24 {
+        return 0;
+    }
+    side_ct[24] as u64
+}

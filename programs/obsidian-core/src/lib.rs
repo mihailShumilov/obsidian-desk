@@ -184,17 +184,26 @@ pub mod obsidian_core {
         require!(order_a.status == OrderStatus::Active, ErrorCode::OrderNotActive);
         require!(order_b.status == OrderStatus::Active, ErrorCode::OrderNotActive);
 
+        // Bind seller / buyer from the FHE side decrypt — never from the
+        // caller-supplied (order_a, order_b) ordering. Closes SEC-H-2.
+        // 0 = bid, 1 = ask. Same-side matches must be rejected.
+        let a_side = encrypt_cpi::mock_decrypt_side(&order_a.side_ct);
+        let b_side = encrypt_cpi::mock_decrypt_side(&order_b.side_ct);
+        require!(a_side != b_side, ErrorCode::SameSide);
+        let (seller_dwallet, buyer_dwallet) = if a_side == 1 {
+            (order_a.dwallet_id, order_b.dwallet_id)
+        } else {
+            (order_b.dwallet_id, order_a.dwallet_id)
+        };
+
         let clock = Clock::get()?;
         let record = &mut ctx.accounts.match_record;
         record.market = intent.market;
         record.match_id = intent.match_id;
         record.order_a = intent.order_a;
         record.order_b = intent.order_b;
-        // Side-assignment is arbitrary at the program layer — the Encrypt
-        // side-decrypt (P3) will tell us which order is bid vs ask. For P2
-        // we tag order_a as the seller leg for determinism in tests.
-        record.seller_dwallet = order_a.dwallet_id;
-        record.buyer_dwallet = order_b.dwallet_id;
+        record.seller_dwallet = seller_dwallet;
+        record.buyer_dwallet = buyer_dwallet;
         record.fill_size_decrypted = response.fill_size;
         record.clearing_price_decrypted = response.clearing_price;
         record.settle_status = SettleStatus::Pending;

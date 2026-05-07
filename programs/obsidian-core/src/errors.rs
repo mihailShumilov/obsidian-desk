@@ -16,6 +16,8 @@ pub enum ErrorCode {
     CiphertextTooLarge,
     #[msg("FHE comparator did not authorize a match")]
     MatchRejected,
+    #[msg("Both orders are on the same side (both bids or both asks)")]
+    SameSide,
     #[msg("Provided match_id does not match market.match_count + 1")]
     InvalidMatchId,
     #[msg("Match has already been settled")]
