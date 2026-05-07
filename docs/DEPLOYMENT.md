@@ -209,45 +209,178 @@ fly scale count 1 --vm-size shared-cpu-1x --vm-memory 512
 
 Mount the keypair into the container at `/data/keeper.json` via a Fly secret + an entrypoint script that writes `$ANCHOR_WALLET_JSON` to disk on boot. Single instance — the keeper is idempotent at the per-MatchRecord level (settled records are skipped) but two parallel instances will both fight to call `finalize_settlement` and pay for losing transactions.
 
-## 5. Production with docker-compose (Linux/x86)
+## 5. Run the prod stack locally, pointed at Solana devnet
 
-Use this for self-hosted demos or staging. Pulls images from GHCR rather than building locally.
+Use this **before** §6 — it's the dry run. Same compose files, same images, same env shape, just running on your laptop with a public Solana devnet RPC instead of a host validator. The whole point of this section is: if §5 works on your laptop, §6 (the VPS) is the same recipe with a Caddy + Cloudflare wrapper around it. Anything that breaks at §5 will break at §6 too — fix it here first.
+
+The dev compose file (`docker-compose.yml`) defaults to `localhost:18899` (host validator). The prod overlay (`docker-compose.prod.yml`) drops the validator entirely and pulls all RPCs from environment variables. We run **both** files together so the overlay's strict env-required defaults override the dev file's localhost defaults.
+
+### 5.1 Prereqs (laptop)
+
+- Docker Desktop ≥ 4.25 with Compose v2 (`docker compose version` → v2.x)
+- A funded Solana keypair on devnet (the keeper will sign with it). Quickest path:
+  ```bash
+  solana-keygen new --no-bip39-passphrase -o ./scripts/.keeper-keypair.json
+  solana airdrop 2 --url devnet --keypair ./scripts/.keeper-keypair.json
+  solana balance --url devnet --keypair ./scripts/.keeper-keypair.json   # ≥ 1 SOL
+  ```
+- The Anchor IDL on disk at `target/idl/obsidian_core.json`. The keeper bind-mounts this read-only — without it, the keeper container crash-loops with "missing IDL". Build once on the host:
+  ```bash
+  anchor build --no-idl --ignore-keys
+  # then explicitly request the v1 IDL artifact:
+  anchor idl build > target/idl/obsidian_core.json
+  ```
+  (If you already have a built IDL committed somewhere or pulled from CI, a manual copy works equally well.)
+
+### 5.2 Image source — local build OR GHCR pull
+
+Pick one. The compose overlay defaults to `ghcr.io/mihailshumilov/obsidian-{app,keeper}:${IMAGE_TAG:-latest}`.
+
+**Option A — pull from GHCR** (matches the VPS path exactly, fewer moving parts on your laptop):
 
 ```bash
-cp .env.example .env.production
-# edit .env.production:
-#   NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
-#   SOLANA_RPC=https://api.devnet.solana.com
-#   OBSIDIAN_PROGRAM_ID=H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
-#   IMAGE_TAG=v0.1.0
-#   KEEPER_KEYPAIR_PATH=/path/to/keeper-keypair.json
-
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-  --env-file .env.production up -d
+docker login ghcr.io -u <your-github-username>   # only needed if the package is private
+# .env.local-devnet sets IMAGE_TAG; the overlay does the pull on `up`.
 ```
 
-### 5.1 Building & pushing images to GHCR
+**Option B — build locally** (faster iteration when you're changing app/keeper code):
 
-Until we land a CI workflow that does this, push manually:
+```bash
+docker compose build app keeper
+# overrides the GHCR pull for THIS compose run; `pull_policy: always` in the
+# overlay still tries to pull on `up`, so add --pull=never to keep the local
+# images.
+```
+
+If you build locally, append `--pull=never` to the `up` command below; otherwise compose will pull and replace your fresh build.
+
+### 5.3 Write `.env.local-devnet`
+
+```bash
+cp .env.example .env.local-devnet
+```
+
+Then edit it to point at devnet:
+
+```ini
+# RPC — both vars must be the same URL, both must be reachable from your
+# laptop. The browser hits NEXT_PUBLIC_SOLANA_RPC; the keeper hits SOLANA_RPC.
+NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
+SOLANA_RPC=https://api.devnet.solana.com
+
+# Pinned program. Do NOT change unless you've redeployed obsidian-core to
+# devnet under a different declare_id!() — and updated Anchor.toml + lib.rs
+# in lockstep.
+OBSIDIAN_PROGRAM_ID=H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
+NEXT_PUBLIC_NETWORK=devnet
+OBSIDIAN_ESPLORA_URL=https://mempool.space/signet/api
+
+# Image tag — only consulted if you went with §5.2 Option A (GHCR pull).
+# `latest` floats; pin to a sha or semver in production.
+IMAGE_TAG=latest
+
+# Keeper signer — absolute path on the laptop. The compose `secrets` block
+# reads the file from this path and mounts it at /run/secrets/keeper_keypair.json
+# inside the container.
+KEEPER_KEYPAIR_PATH=/Users/<you>/path/to/encrypt-ika-obsidian-desk/scripts/.keeper-keypair.json
+```
+
+For anything resembling real traffic, replace the public `api.devnet.solana.com` with a Helius / Triton / QuickNode devnet endpoint — the public RPC is heavily rate-limited and the wallet adapter will drop connections under load. Do this **here**, on your laptop, so you discover the rate limit before the VPS does.
+
+The `assertNotMockOnMainnet` guard inside the SDK refuses to boot if `OBSIDIAN_*_MODE=mock` is paired with a mainnet RPC. Real-mode (`OBSIDIAN_*_MODE=real`) is also wired and works against devnet — see §3.5. The compose overlay currently hardcodes `mock` for the demo path; flip via env override on the `up` command if you want the live integration.
+
+### 5.4 Start the stack
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.local-devnet up -d
+docker compose ps        # both services should reach `healthy` within ~60 s
+docker compose logs -f --tail 50 keeper   # watch the first match-poll cycle
+```
+
+If you opted for Option B (local build), the command is:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.local-devnet up -d --pull=never
+```
+
+### 5.5 Smoke checks
+
+Run these before declaring the local devnet run "good". Each one corresponds to a class of failure that's much cheaper to debug on a laptop than on a VPS at 3 AM.
+
+```bash
+# 1. health endpoints respond on the host ports (note the project's offset port scheme)
+curl -fsS http://127.0.0.1:13000/api/health           # → 200 {"ok":true}
+curl -fsS http://127.0.0.1:13001/status | jq          # → keeper /status JSON
+
+# 2. the keeper actually reaches devnet (look for "[keeper] poll cycle" lines without errors)
+docker compose logs keeper --tail 30
+
+# 3. the app proxies devnet RPC through the wallet adapter — open the browser
+open http://127.0.0.1:13000   # macOS; or use your browser
+#    → connect Phantom (devnet selected)
+#    → /trade should render the depth card without console errors
+#    → /deposit wizard should reach step 2 (signet address rendered)
+
+# 4. the keeper's signer has SOL on devnet
+solana balance --url devnet --keypair "$KEEPER_KEYPAIR_PATH"
+
+# 5. the program is reachable from the laptop's Solana CLI
+solana program show H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp --url devnet
+```
+
+If `curl /status` returns the keeper JSON but `attempted` stays at 0 forever, see §8 "Match never settles". If the browser console shows ECONNREFUSED on the wallet RPC, the `NEXT_PUBLIC_SOLANA_RPC` value is wrong — env vars prefixed `NEXT_PUBLIC_` are inlined into the build, so a hard-refresh after editing `.env.local-devnet` is required. (For locally-built images, that means `docker compose build app` again.)
+
+### 5.6 Tear down
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.local-devnet down
+# add `-v` to also drop the solana-ledger volume (only matters if you ever
+# enabled the `local-rpc` profile during this run).
+```
+
+### 5.7 (Optional) Build & push images to GHCR
+
+Skip this if you're staying with `IMAGE_TAG=latest` from CI. When you want to pin the VPS to a specific build, push it explicitly:
 
 ```bash
 docker login ghcr.io -u <your-github-username>
 
-VERSION=v0.1.0
+VERSION=v0.2.0
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -f app/Dockerfile -t ghcr.io/<org>/obsidian-app:$VERSION \
+  -f app/Dockerfile -t ghcr.io/mihailshumilov/obsidian-app:$VERSION \
   --push .
 
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -f keeper/Dockerfile -t ghcr.io/<org>/obsidian-keeper:$VERSION \
+  -f keeper/Dockerfile -t ghcr.io/mihailshumilov/obsidian-keeper:$VERSION \
   --push .
 ```
 
-Then bump `IMAGE_TAG=$VERSION` in `.env.production` and `docker compose ... up -d`.
+Then set `IMAGE_TAG=v0.2.0` in `.env.local-devnet`, re-run the §5.4 `up -d`, and verify `docker compose images` shows the digest you just pushed.
 
-## 6. Single-VPS deploy with Cloudflare DNS
+Once §5.5's smoke checks all pass on your laptop, you have a working devnet deployment. **§6 is the same compose command on a different host, plus Caddy + Cloudflare in front.**
 
-Self-host everything on one Linux box: the compose stack from §5 plus a reverse proxy that Cloudflare routes traffic to. Good fit for demos, staging, or a cheap production box — no per-service platform accounts, one IP to firewall, one TLS cert to manage.
+## 6. Move the same stack to a VPS (Cloudflare DNS in front)
+
+The compose stack from §5 is portable: the VPS runs the *exact same* `docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d` command. What changes is the host environment around it:
+
+| Concern | Local laptop (§5) | VPS (§6) |
+|---|---|---|
+| Where the stack runs | Docker Desktop | Docker Engine on Linux |
+| Inbound traffic | nothing — you `curl 127.0.0.1` | Caddy on `:80/:443` reverse-proxies to `127.0.0.1:13000` |
+| TLS | none | Let's Encrypt via Caddy (or Cloudflare Origin CA — §6.8) |
+| DNS | none | Cloudflare A record, proxied (orange cloud) |
+| Keeper signer | a keypair file at `KEEPER_KEYPAIR_PATH` | same shape, generated **on the VPS** (never copied across machines) |
+| RPC | public devnet from your ISP | public devnet from the VPS — same URL, different egress |
+| Process supervision | `docker compose` in the foreground | `docker compose ... -d` + Docker daemon's restart policy |
+| Logs | `docker compose logs -f` | `journalctl -u docker` for the daemon, `docker compose logs` for the services |
+| Failure mode | "fix it on your laptop" | "ssh in, fix it, restart" — every minute is a downtime minute |
+
+Because §5 and §6 are the same compose recipe, the most useful debugging move on the VPS is to fall back to running §5.4 from the project root *on the VPS itself* (no Caddy, no DNS) and `curl 127.0.0.1:13000/api/health` from the VPS shell. If that works, the bug is in Caddy / Cloudflare / DNS. If it doesn't, the bug is in env / RPC / image — same diagnostic flow as on your laptop.
+
+The §6 sub-sections walk through provisioning the host, putting the same compose stack on it, then layering TLS + DNS.
 
 ### 6.1 Minimum requirements
 
@@ -305,14 +438,19 @@ docker compose version   # expect v2.x
 
 ### 6.4 Clone the repo and write `.env.production`
 
+Push any local commits to GitHub first — the VPS will clone from the remote, not from your laptop. This is the implicit checkpoint between §5 and §6: whatever code §5 was running locally must be on `main` (or the tag you intend to deploy).
+
 ```bash
-su - obsidian
-git clone https://github.com/<org>/encrypt-ika-obsidian-desk.git obsidian-desk
+# on your laptop
+git push origin main
+
+# on the VPS as obsidian
+git clone https://github.com/mihailShumilov/obsidian-desk.git obsidian-desk
 cd obsidian-desk
 cp .env.example .env.production
 ```
 
-Edit `.env.production`:
+`.env.production` is the **VPS twin** of `.env.local-devnet` from §5.3 — same variables, same values, different `KEEPER_KEYPAIR_PATH` (the VPS path), and `IMAGE_TAG` is pinned (don't ship `latest` to a public host):
 
 ```ini
 NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
@@ -320,18 +458,20 @@ SOLANA_RPC=https://api.devnet.solana.com
 OBSIDIAN_PROGRAM_ID=H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
 NEXT_PUBLIC_NETWORK=devnet
 OBSIDIAN_ESPLORA_URL=https://mempool.space/signet/api
-IMAGE_TAG=v0.1.0
+IMAGE_TAG=v0.2.0
 KEEPER_KEYPAIR_PATH=/home/obsidian/secrets/keeper-keypair.json
 ```
 
-For anything above a hackathon demo, swap the public `api.devnet.solana.com` for a Helius / Triton / QuickNode devnet endpoint — the public one is heavily rate-limited and will drop the wallet adapter under any real traffic.
+If §5 used a Helius / Triton / QuickNode endpoint, copy the same URL here — the rate limit you fixed at §5.3 does not heal itself on the VPS.
 
 ### 6.5 Provision keeper signer + IDL
 
 The keeper needs a funded Solana keypair and the Anchor IDL on disk (bind-mounted at `target/idl/obsidian_core.json`, see `docker-compose.yml`).
 
+**Keypair — generate ON the VPS.** Never copy a keypair off your laptop; if it leaks once, the laptop's filesystem snapshots, Time Machine backups, and shell history all become incident-response surface.
+
 ```bash
-# keypair — generate on the VPS, never copy from a shared machine
+# on the VPS as obsidian
 install -d -m 700 ~/secrets
 curl -sSfL https://release.anza.xyz/stable/install | sh
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
@@ -340,13 +480,20 @@ chmod 600 ~/secrets/keeper-keypair.json
 solana airdrop 2 --url devnet --keypair ~/secrets/keeper-keypair.json
 ```
 
-From your workstation, after `anchor build`:
+**IDL — copy from your workstation** after a fresh `anchor build` (the VPS doesn't need the Rust toolchain just to consume an IDL):
 
 ```bash
+# on your laptop
+anchor build --no-idl --ignore-keys
+anchor idl build > target/idl/obsidian_core.json
 rsync -av target/idl/ obsidian@<vps-ip>:/home/obsidian/obsidian-desk/target/idl/
 ```
 
+If you'd rather avoid `rsync`, commit a built IDL into a release artifact and `wget` it on the VPS — the only requirement is that `target/idl/obsidian_core.json` exists at the path the compose file bind-mounts.
+
 ### 6.6 Start the stack
+
+This is the same compose command from §5.4 — only the env file name and the working directory change.
 
 ```bash
 # on the VPS as obsidian
@@ -358,11 +505,14 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 docker compose ps   # both services reach "healthy" within ~60 s
 ```
 
-Smoke test from the VPS loopback before any public DNS flips:
+Run the §5.5 smoke checks **on the VPS loopback** before any public DNS flips. If any of these fail, you have a §5-class bug, not a §6-class bug — fix it here without involving Caddy or Cloudflare:
 
 ```bash
 curl -fsS http://127.0.0.1:13000/api/health
-curl -fsS http://127.0.0.1:13001/status | head -c 200
+curl -fsS http://127.0.0.1:13001/status | jq
+docker compose logs --tail 50 keeper
+solana balance --url devnet --keypair ~/secrets/keeper-keypair.json
+solana program show H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp --url devnet
 ```
 
 ### 6.7 Reverse proxy with Caddy
@@ -442,8 +592,23 @@ Browser check: open `https://obsidiandesk.app`, connect a Phantom wallet on devn
 
 ### 6.10 Updates and rollback
 
+The release flow is **always laptop-first** — verify against §5 before the VPS sees it. Skipping the laptop step here is how you ship a regression that 3 AM-you has to debug.
+
 ```bash
-# as obsidian@vps
+# 1. on your laptop: pull & smoke-test against devnet (§5.4 + §5.5)
+git checkout v0.2.0
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.local-devnet pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --env-file .env.local-devnet up -d
+# run the §5.5 smoke checks. If anything fails, this release does NOT
+# go to the VPS.
+
+# 2. push the tag
+git push origin v0.2.0
+
+# 3. on the VPS: same compose command, against .env.production
+ssh obsidian@<vps-ip>
 cd ~/obsidian-desk
 git fetch && git checkout v0.2.0
 sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=v0.2.0/' .env.production
@@ -451,9 +616,13 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   --env-file .env.production pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   --env-file .env.production up -d
+
+# 4. verify (§6.6 + §6.9)
+curl -fsS http://127.0.0.1:13000/api/health
+curl -I  https://obsidiandesk.app/api/health
 ```
 
-Rollback is the same commands with the previous `IMAGE_TAG`. Expect ~5 s of 502s during the app container swap; Caddy retries upstream, so most browsers never see it.
+Rollback is the same flow with the previous `IMAGE_TAG`. Expect ~5 s of 502s during the app container swap; Caddy retries upstream, so most browsers never see it. If the rollback itself doesn't recover within a minute, fall back to `docker compose stop app keeper && docker compose ... up -d` to force a fresh container start; the volumes are stateless and survive that.
 
 ### 6.11 Alternative — Cloudflare Tunnel (no open inbound ports)
 
