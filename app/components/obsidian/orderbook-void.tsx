@@ -14,13 +14,14 @@
  * Footer: `The book is encrypted on-chain. Your view is the fog.`
  */
 
+import type { Side } from '@obsidian-desk/sdk';
 import { Cipher } from './cipher';
 import { cn } from '@/lib/utils';
 
 export interface EncryptedOrderView {
   id: string;
   /** Plaintext price/size only when this is one of YOUR orders. */
-  yours?: { side: 'bid' | 'ask'; price: string; size: string };
+  yours?: { side: Side; price: string; size: string };
 }
 
 export interface OrderbookVoidProps {
@@ -64,7 +65,7 @@ function Row({
 }: {
   orderId: string;
   isYours: boolean;
-  yours?: { side: 'bid' | 'ask'; price: string; size: string };
+  yours?: { side: Side; price: string; size: string };
 }): JSX.Element {
   return (
     <div

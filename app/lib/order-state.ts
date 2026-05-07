@@ -8,7 +8,9 @@
 
 import { create } from 'zustand';
 
-export type Side = 'bid' | 'ask';
+import type { Side } from '@obsidian-desk/sdk';
+
+export type { Side };
 export type Status = 'sealed' | 'matched' | 'settling' | 'settled' | 'cancelled';
 
 export interface YourOrder {
