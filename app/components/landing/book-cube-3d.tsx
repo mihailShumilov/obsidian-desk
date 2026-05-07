@@ -25,6 +25,7 @@ import {
 } from 'three';
 
 import { randomCipherString } from '@/lib/cipher-glyphs';
+import { useDocumentVisible } from '@/lib/use-document-visible';
 
 const FACE_PIXELS = 256;
 const LINES_PER_FACE = 8;
@@ -88,8 +89,9 @@ function CubeMesh(): JSX.Element {
     return Array.from({ length: 6 }, () => makeFaceTexture());
   }, []);
 
+  const visible = useDocumentVisible();
   useEffect(() => {
-    if (!faces) return;
+    if (!faces || !visible) return;
     const id = setInterval(() => {
       for (const f of faces) {
         const ctx = f.canvas.getContext('2d')!;
@@ -98,7 +100,7 @@ function CubeMesh(): JSX.Element {
       }
     }, CADENCE_MS);
     return () => clearInterval(id);
-  }, [faces]);
+  }, [faces, visible]);
 
   useFrame((_, delta) => {
     if (!meshRef.current) return;

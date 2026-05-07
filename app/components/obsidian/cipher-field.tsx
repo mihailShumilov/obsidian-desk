@@ -21,6 +21,7 @@ import {
 } from 'react';
 import { cn } from '@/lib/utils';
 import { randomCipherString } from '@/lib/cipher-glyphs';
+import { useDocumentVisible } from '@/lib/use-document-visible';
 
 const REVEAL_MS = 600;
 
@@ -41,6 +42,7 @@ export const CipherField = forwardRef<HTMLInputElement, CipherFieldProps>(
     const [focused, setFocused] = useState(false);
     const [mask, setMask] = useState(() => maskFor(value));
     const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const visible = useDocumentVisible();
 
     // Re-mask whenever the underlying plaintext changes length.
     useEffect(() => {
@@ -48,12 +50,13 @@ export const CipherField = forwardRef<HTMLInputElement, CipherFieldProps>(
     }, [value]);
 
     // While field is unfocused & not revealing, slowly mutate the mask
-    // so it feels alive — same vibe as <Cipher /> at the cube.
+    // so it feels alive — same vibe as <Cipher /> at the cube. Pause when
+    // the tab is hidden so we don't churn React renders in the background.
     useEffect(() => {
-      if (focused || revealing) return;
+      if (focused || revealing || !visible) return;
       const id = setInterval(() => setMask(maskFor(value)), 800);
       return () => clearInterval(id);
-    }, [focused, revealing, value]);
+    }, [focused, revealing, value, visible]);
 
     function flashReveal(): void {
       setRevealing(true);

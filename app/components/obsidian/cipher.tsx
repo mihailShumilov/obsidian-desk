@@ -20,6 +20,7 @@
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { randomCipherString } from '@/lib/cipher-glyphs';
+import { useDocumentVisible } from '@/lib/use-document-visible';
 
 export interface CipherProps {
   /** If omitted, glyphs are generated fresh each tick. */
@@ -40,6 +41,7 @@ export function Cipher({
   // SSR-safe: deterministic placeholder on first render (server + client
   // hydration agree). The real cipher glyphs replace it on mount.
   const [text, setText] = useState<string>(() => value ?? '·'.repeat(length));
+  const visible = useDocumentVisible();
 
   useEffect(() => {
     if (cadenceMs === 0) {
@@ -51,9 +53,10 @@ export function Cipher({
       return;
     }
     setText(randomCipherString(length));
+    if (!visible) return;
     const id = setInterval(() => setText(randomCipherString(length)), cadenceMs);
     return () => clearInterval(id);
-  }, [cadenceMs, length, value]);
+  }, [cadenceMs, length, value, visible]);
 
   return (
     <span
