@@ -2,9 +2,10 @@
  * Global dWallet state for the app.
  *
  * Persisted under `obsidian:dwallet:v1` so a refresh during the wizard
- * preserves your step. The store is plain — refresh + balance polling
- * are wired by the `useDwalletPoller` hook below so SSR doesn't try to
- * touch `window.localStorage`.
+ * preserves your step. **Only public fields persist** — the dWallet `id`
+ * (currently the auth token for `lockPolicyAction` in mock mode) lives
+ * in memory only, so an XSS / extension that dumps localStorage cannot
+ * later use it to grief a user's policy.
  *
  * `bigint` cannot be JSON-serialized, so balance is stored as a string
  * in localStorage and round-tripped through BigInt at use sites.
@@ -70,6 +71,19 @@ export const useDwalletStore = create<DwalletState>()(
     {
       name: 'obsidian:dwallet:v1',
       storage: createJSONStorage(() => localStorage),
+      // Persist only the wizard cursor + non-sensitive display values.
+      // `dwallet.id` is currently the auth token in mock mode (any caller
+      // who knows it can lockPolicyAction another user's dWallet), so
+      // keeping it in memory only limits XSS / extension exfil risk.
+      // A refresh wipes the in-memory dWallet — the wizard's reset UX
+      // walks the user through re-creation.
+      partialize: (state) => ({
+        balanceSats: state.balanceSats,
+        totalSats: state.totalSats,
+        policyLocked: state.policyLocked,
+        policyAccount: state.policyAccount,
+        step: state.step,
+      }),
     },
   ),
 );
