@@ -1,4 +1,12 @@
-# ObsidianDesk — production overlay.
+# ObsidianDesk — DEMO overlay (not production-grade).
+#
+# This file ships with OBSIDIAN_ENCRYPT_MODE=mock and OBSIDIAN_IKA_MODE=mock.
+# That combination is suitable for hackathon demos on devnet/signet only.
+# DO NOT deploy this overlay against a mainnet RPC — the SDK's safety guard
+# (assertNotMockOnMainnet) refuses to boot the keeper or first server action
+# in that case, and you would be running encrypted-orderbook semantics with
+# plaintext-recoverable ciphertexts. Real-mode closure is tracked in
+# docs/gaps.md (gap E5 / I0).
 #
 # Layered on top of docker-compose.yml; drops the local validator entirely
 # (use a real Solana RPC) and removes the dev-only image rebuild config:

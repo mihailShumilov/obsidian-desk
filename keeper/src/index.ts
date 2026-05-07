@@ -32,7 +32,11 @@ import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { SpendInput } from '@obsidian-desk/sdk';
-import { btc as btcSdk, DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
+import {
+  btc as btcSdk,
+  DEFAULT_OBSIDIAN_PROGRAM_ID,
+  assertNotMockOnMainnet,
+} from '@obsidian-desk/sdk';
 import { pollOnce, type PollReport } from './poll.ts';
 import { loadKeypair } from './anchor-shims.ts';
 import { createHash } from 'node:crypto';
@@ -90,6 +94,12 @@ function bumpMetrics(metrics: MetricsSnapshot, report: PollReport, err?: unknown
 }
 
 async function main(): Promise<void> {
+  assertNotMockOnMainnet({
+    encryptMode: process.env['OBSIDIAN_ENCRYPT_MODE'],
+    ikaMode: process.env['OBSIDIAN_IKA_MODE'],
+    rpc: RPC,
+    network: process.env['NEXT_PUBLIC_NETWORK'],
+  });
   const wallet = new Wallet(loadKeypair(WALLET_PATH));
   const connection = new Connection(RPC, 'confirmed');
   const provider = new AnchorProvider(connection, wallet, {

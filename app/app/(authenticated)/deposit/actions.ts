@@ -17,7 +17,19 @@ import {
   ika,
   DEFAULT_ORDER_EXPIRY_SLOTS,
   DEFAULT_OBSIDIAN_PROGRAM_ID,
+  assertNotMockOnMainnet,
 } from '@obsidian-desk/sdk';
+
+// Trip the safety guard at module-evaluation time. If the deployed Next
+// server is mis-pointed at a mainnet RPC while still in mock mode, the
+// first import of this module crashes the worker rather than serving
+// any deposit traffic.
+assertNotMockOnMainnet({
+  encryptMode: process.env['OBSIDIAN_ENCRYPT_MODE'],
+  ikaMode: process.env['OBSIDIAN_IKA_MODE'],
+  rpc: process.env['NEXT_PUBLIC_SOLANA_RPC'] ?? process.env['SOLANA_RPC'],
+  network: process.env['NEXT_PUBLIC_NETWORK'],
+});
 
 const PROGRAM_ID =
   process.env['NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID'] ?? DEFAULT_OBSIDIAN_PROGRAM_ID;
