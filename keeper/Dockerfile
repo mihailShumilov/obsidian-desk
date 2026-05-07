@@ -25,6 +25,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY app/package.json     ./app/package.json
 COPY sdk/package.json     ./sdk/package.json
 COPY keeper/package.json  ./keeper/package.json
+# Patch file referenced by the lockfile (Encrypt 0.1.1 exports redirect).
+# Required at install time — see app/Dockerfile for the full rationale.
+COPY patches              ./patches
 
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile

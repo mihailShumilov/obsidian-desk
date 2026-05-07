@@ -21,6 +21,12 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY app/package.json       ./app/package.json
 COPY sdk/package.json       ./sdk/package.json
 COPY keeper/package.json    ./keeper/package.json
+# pnpm verifies the patch hash at install time — copy patches/ here
+# (after manifests, before install) so the lockfile entry
+# `patchedDependencies['@encrypt.xyz/pre-alpha-solana-client@0.1.1']`
+# resolves. Without this, `pnpm install --frozen-lockfile` fails with
+# `ENOENT: patches/@encrypt.xyz__pre-alpha-solana-client@0.1.1.patch`.
+COPY patches               ./patches
 
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
