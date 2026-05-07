@@ -13,6 +13,7 @@
  */
 
 import { useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { encrypt } from '@obsidian-desk/sdk';
@@ -20,8 +21,20 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ChainBadge } from '@/components/obsidian/chain-badge';
 import { OrderbookVoid } from '@/components/obsidian/orderbook-void';
-import { PriceChart } from '@/components/trade/price-chart';
 import { OrderForm, type OrderFormSubmit } from '@/components/trade/order-form';
+
+// lightweight-charts is ~80-120 KB gzipped and only renders after a layout
+// pass — splitting it off the /trade critical path lets the orderbook +
+// form paint immediately. SSR is disabled because the chart touches `window`.
+const PriceChart = dynamic(
+  () => import('@/components/trade/price-chart').then((m) => m.PriceChart),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-[420px] animate-pulse rounded-md bg-obsidian-800/40" />
+    ),
+  },
+);
 import { YourOrders } from '@/components/trade/your-orders';
 import {
   MatchSettleModal,
