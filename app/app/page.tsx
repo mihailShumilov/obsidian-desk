@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { BookCube } from '@/components/landing/book-cube';
 import { ProblemCards } from '@/components/landing/problem-cards';
-import { SolutionDiagram } from '@/components/landing/solution-diagram';
+import { BtcJourneyLive } from '@/components/landing/btc-journey-live';
 import { WhyDuality } from '@/components/landing/why-duality';
 import { StatsStrip } from '@/components/landing/stats-strip';
 
@@ -17,7 +17,7 @@ export default function LandingPage(): JSX.Element {
     <main>
       <Hero />
       <ProblemCards />
-      <SolutionDiagram />
+      <BtcJourneyLive />
       <WhyDuality />
       <StatsStrip />
       <CtaStrip />

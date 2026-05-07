@@ -46,9 +46,9 @@ export function Cipher({
   cadenceMs = 800,
   className,
 }: CipherProps): JSX.Element {
-  const [text, setText] = useState<string>(() =>
-    value ?? randGlyphs(length),
-  );
+  // SSR-safe: deterministic placeholder on first render (server + client
+  // hydration agree). The real cipher glyphs replace it on mount.
+  const [text, setText] = useState<string>(() => value ?? '·'.repeat(length));
 
   useEffect(() => {
     if (cadenceMs === 0) {
