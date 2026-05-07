@@ -1,14 +1,21 @@
 use anchor_lang::prelude::*;
 
-/// Per-ciphertext cap for fields that share an account with 2+ other
-/// ciphertexts (`EncryptedOrder`, `MatchIntent`).
+/// Per-ciphertext cap for `EncryptedOrder` fields. Real Encrypt FHE blobs
+/// are typically a few hundred bytes; 3000 is the upper bound documented
+/// in `docs/vendor/encrypt-pre-alpha.md` and stays under Solana's 10 240-byte
+/// CPI realloc cap (`MAX_PERMITTED_DATA_INCREASE`) at 3 × 3000.
 ///
-/// Set to 3000 (not the prompt's nominal 4096) so the total account size
-/// stays under Solana's 10 240-byte CPI realloc cap (`MAX_PERMITTED_DATA_INCREASE`).
-/// 3 × 3000 + per-account overhead ≈ 9.2 KB. Once P3 swaps inline blobs for
-/// 32-byte Pubkey references to Encrypt Ciphertext keypair accounts (gap E1
-/// in `docs/gaps.md`), this cap becomes irrelevant.
+/// Once P3 swaps inline blobs for 32-byte Pubkey references to Encrypt
+/// Ciphertext keypair accounts (gap E1 in `docs/gaps.md`), this cap becomes
+/// irrelevant.
 pub const CT_MAX: usize = 3000;
+
+/// Tighter cap for `MatchIntent` ciphertext fields, where the program
+/// currently stores 100-byte placeholder blobs from `encrypt_cpi.rs` until
+/// gap E1 lands. Sizing the account at 3 × CT_MAX (9 KB) was forcing every
+/// `try_match` to rent the worst-case slab. 256 bytes covers the placeholders
+/// with margin and drops per-intent rent ~12×.
+pub const MATCH_INTENT_CT_MAX: usize = 256;
 
 /// Singleton ciphertext slot in `MarketState`. No realloc-cap pressure here
 /// because it's the only large field in the struct, so the prompt's 4096 fits.
@@ -89,11 +96,11 @@ pub struct MatchIntent {
     pub match_id: u64,
     pub order_a: Pubkey,
     pub order_b: Pubkey,
-    #[max_len(CT_MAX)]
+    #[max_len(MATCH_INTENT_CT_MAX)]
     pub can_match_ct: Vec<u8>,
-    #[max_len(CT_MAX)]
+    #[max_len(MATCH_INTENT_CT_MAX)]
     pub fill_size_ct: Vec<u8>,
-    #[max_len(CT_MAX)]
+    #[max_len(MATCH_INTENT_CT_MAX)]
     pub clearing_price_ct: Vec<u8>,
     pub created_at: i64,
     pub bump: u8,
