@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { Geist, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
-import { Providers } from '@/components/providers';
 import { Header } from '@/components/shell/header';
 import { Footer } from '@/components/shell/footer';
 
@@ -34,13 +33,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${mono.variable}`}>
       <body className="min-h-screen bg-obsidian-950 font-sans text-foreground antialiased">
-        <Providers>
-          <div className="flex min-h-screen flex-col">
-            <Header />
-            <div className="flex-1">{children}</div>
-            <Footer />
-          </div>
-        </Providers>
+        <div className="flex min-h-screen flex-col">
+          <Header />
+          <div className="flex-1">{children}</div>
+          <Footer />
+        </div>
       </body>
     </html>
   );

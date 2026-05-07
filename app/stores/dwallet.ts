@@ -15,7 +15,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { useEffect, useRef } from 'react';
-import { getAddressBalanceAction } from '@/app/deposit/actions';
+import { getAddressBalanceAction } from '@/app/(authenticated)/deposit/actions';
 
 export interface DwalletInfo {
   id: string;
