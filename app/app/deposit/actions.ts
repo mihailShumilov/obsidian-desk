@@ -73,23 +73,37 @@ interface EsploraAddress {
 }
 
 /**
+ * Signet bech32 P2WPKH (`tb1q…` 42 chars) or P2TR (`tb1p…` 62 chars).
+ * Reject anything else so the action can't be used to amplify load against
+ * mempool.space with arbitrary path segments.
+ */
+const SIGNET_BECH32_RE = /^tb1[02-9ac-hj-np-z]{38,62}$/;
+
+const ZERO_BALANCE: AddressBalance = {
+  confirmedSats: '0',
+  unconfirmedSats: '0',
+  totalSats: '0',
+};
+
+/**
  * Fetch address balance from esplora. Returns 0 across the board on any
  * network failure or non-2xx — the wizard surfaces "—" or "0" gracefully
- * rather than crashing the page.
+ * rather than crashing the page. The fetch uses Next's revalidate cache
+ * keyed on URL so concurrent tabs viewing the same dWallet share one
+ * upstream call (TTL 10s, shorter than the client's 15s poll).
  */
 export async function getAddressBalanceAction(
   address: string,
 ): Promise<AddressBalance> {
+  if (!SIGNET_BECH32_RE.test(address)) return ZERO_BALANCE;
   try {
     const res = await fetch(`${ESPLORA_URL}/address/${encodeURIComponent(address)}`, {
-      cache: 'no-store',
+      next: { revalidate: 10, tags: [`esplora:${address}`] },
       // Esplora can be slow; cap the wait so a hung request doesn't hang
       // the wizard's 15s polling loop.
       signal: AbortSignal.timeout(8_000),
     });
-    if (!res.ok) {
-      return { confirmedSats: '0', unconfirmedSats: '0', totalSats: '0' };
-    }
+    if (!res.ok) return ZERO_BALANCE;
     const json = (await res.json()) as EsploraAddress;
     const confirmed = BigInt(
       json.chain_stats.funded_txo_sum - json.chain_stats.spent_txo_sum,
@@ -103,6 +117,6 @@ export async function getAddressBalanceAction(
       totalSats: (confirmed + unconfirmed).toString(),
     };
   } catch {
-    return { confirmedSats: '0', unconfirmedSats: '0', totalSats: '0' };
+    return ZERO_BALANCE;
   }
 }
