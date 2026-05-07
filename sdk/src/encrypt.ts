@@ -18,12 +18,28 @@
  * `describeCiphertext()` for safe diagnostic output (length + tag only).
  */
 
-import * as crypto from 'node:crypto';
 import {
   DecryptionError,
   EncryptionError,
   VendorSDKUnavailableError,
 } from './errors.ts';
+
+/**
+ * WebCrypto is available in both Node 24 and the browser. Routing through
+ * `globalThis.crypto.getRandomValues` instead of `node:crypto` keeps the
+ * Next.js client bundle from pulling in the `crypto-browserify` polyfill
+ * (~50 KB gzipped) when this module is imported transitively from a
+ * client component.
+ */
+function fillRandom(into: Uint8Array): void {
+  globalThis.crypto.getRandomValues(into);
+}
+
+function randomBytes(len: number): Uint8Array {
+  const out = new Uint8Array(len);
+  fillRandom(out);
+  return out;
+}
 
 // FHE type discriminators per docs/vendor/encrypt-pre-alpha.md §FHE Types.
 export const FheType = {
@@ -77,7 +93,7 @@ function mockEncrypt(value: bigint, fheType: number): Uint8Array {
   const buf = new Uint8Array(CT_ID_LEN);
   buf[0] = MOCK_TAG;
   buf[1] = fheType;
-  crypto.randomFillSync(buf.subarray(2, 16));
+  fillRandom(buf.subarray(2, 16));
   new DataView(buf.buffer, buf.byteOffset, CT_ID_LEN).setBigUint64(
     24,
     value,
@@ -142,7 +158,7 @@ export async function encryptOrder(
     encryptU64(priceQuote),
     encryptU64(sizeBase),
   ]);
-  const nonce = new Uint8Array(crypto.randomBytes(16));
+  const nonce = randomBytes(16);
   return { side_ct, price_ct, size_ct, nonce };
 }
 
