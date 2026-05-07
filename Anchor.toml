@@ -34,7 +34,8 @@ upgradeable = false
 # Non-standard port 18899 (default 8899) to avoid collision with other
 # local Solana validators / Docker projects on this machine.
 # Provider URL above must match.
-bind_address = "0.0.0.0"
+# bind_address must be a specific IP (Agave 3.1+ gossip rejects 0.0.0.0).
+bind_address = "127.0.0.1"
 url = "https://api.devnet.solana.com"
 ledger = ".anchor/test-ledger"
 rpc_port = 18899
