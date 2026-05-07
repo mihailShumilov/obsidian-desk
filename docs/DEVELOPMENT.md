@@ -7,13 +7,25 @@ Deeper than the README quick-start. This doc is the place to look when something
 ## Workspaces at a glance
 
 ```
-sdk/      pure TS — encrypt + ika + btc adapters, mock-mode-only today
-keeper/   Node 24 daemon — polls Solana for Pending matches, signs BTC, finalizes
-app/      Next.js 16.2 frontend — UI + Server Actions for the deposit wizard
-programs/ Rust — Anchor program (obsidian_core)
+sdk/      pure TS — encrypt + ika + btc adapters. mock + real modes
+          (real = live Encrypt + Ika gRPC against Solana devnet)
+keeper/   Node 24 daemon — polls Solana for Pending matches, signs BTC, finalizes.
+          Also exposes a one-shot match-pair CLI for devnet diagnostics.
+app/      Next.js 16.2 frontend — UI + Server Actions for the deposit wizard.
+          React 19.1 (mandatory; React 18 crashes against Next 16's runtime).
+programs/ Rust 1.94 + Anchor 1.0.2 — Anchor program (obsidian_core).
+          Pulls encrypt-anchor for the #[encrypt_fn] match_orders_graph DSL.
 ```
 
 The TS workspaces are linked via pnpm, so `@obsidian-desk/sdk` resolves to `sdk/dist/` (built output, not source). **You must `pnpm -F @obsidian-desk/sdk build` once after a clone** — otherwise `keeper` and `app` typechecks fail with `TS2307: Cannot find module '@obsidian-desk/sdk'`. CI does this automatically; locally you only need to do it again when you edit SDK source.
+
+**SDK barrel**: `encrypt` and `ika` namespaces are intentionally NOT re-exported from `@obsidian-desk/sdk`. They reach `@grpc/grpc-js`, which Turbopack's import-graph walker would otherwise bundle into the client. Use subpath imports:
+
+```ts
+import * as encrypt from '@obsidian-desk/sdk/encrypt';
+import * as ika     from '@obsidian-desk/sdk/ika';
+import * as btc     from '@obsidian-desk/sdk';   // or '@obsidian-desk/sdk/btc' — bitcoinjs is browser-safe
+```
 
 ## Per-workspace debug tips
 
@@ -89,25 +101,45 @@ anchor build
 
 The frontend doesn't import the IDL types today (it talks to the SDK + zustand stores), so you don't usually need to restart the Next dev server after a rebuild.
 
-## Swapping the Encrypt or Ika SDK to a real backend
+## Real-mode (Encrypt + Ika devnet)
 
-When the upstream packages start shipping compiled JS (gap E5 / I0 in [`docs/gaps.md`](gaps.md)):
+Real-mode is wired and verified. Gaps E5 + I0 are closed:
 
-1. `pnpm -F @obsidian-desk/sdk add @encrypt.xyz/...` (or whatever the published name is).
-2. In `sdk/src/encrypt.ts`, locate the `case 'real':` branch (currently throws `VendorSDKUnavailableError`) and call the real client.
-3. The adapter's exported types — `Side`, `EncryptedOrderBlob`, `Chain`, `DWallet`, `Policy` — should not change. The whole point of the adapter is that callers (`keeper`, `app`, tests) do NOT have to update.
-4. Run `pnpm -F @obsidian-desk/sdk test`. If the byte-shape of real ciphertexts differs from the mock 32-byte tagged blob, update `MOCK_TAG`/`CT_ID_LEN` constants and any fixtures.
-5. Run `anchor test` to confirm the whole flow still settles.
+- **Encrypt** consumes `@encrypt.xyz/pre-alpha-solana-client@0.1.1` via a `pnpm patch` (`patches/@encrypt.xyz__pre-alpha-solana-client@0.1.1.patch`) that redirects `exports` from the uncompiled `./src/grpc.ts` to the shipped `./dist/grpc.js`, and adds `.js` extensions to relative imports inside `dist/` so Node 24 ESM resolves them.
+- **Ika** vendors the upstream gRPC + bcs sources (no compiled `dist/` exists upstream) into `sdk/src/ika-vendor/`, with `Secp256k1` / `ECDSASecp256k1` substituted for the upstream Curve25519/EdDSA defaults so the dWallet matches Bitcoin.
+
+Flip via env vars; the adapter shape doesn't change between modes:
+
+```bash
+OBSIDIAN_ENCRYPT_MODE=real OBSIDIAN_IKA_MODE=real \
+  pnpm -F @obsidian-desk/sdk build && \
+  node sdk/scripts/devnet-smoke.mjs
+```
+
+Smoke test expectations (4 green checks): `encryptU64`, `encryptOrder`, `createDWallet`, `lockPolicy`. Each line prints the real-mode artifact (ciphertext id / btc address) returned by devnet.
+
+To exercise the keeper matching loop end-to-end:
+
+```bash
+ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
+  ANCHOR_WALLET=~/.config/solana/keeper.json \
+  tsx keeper/scripts/devnet-bootstrap.ts        # market + 2 opposite-side orders
+tsx keeper/scripts/match-pair.ts <market> <a> <b>
+```
+
+The match-pair script reaches the `execute_graph` CPI inside `try_match` and currently stops at gap **E2-residual** — `encrypt-anchor` 0.1.0's `invoke_execute_graph` demotes the outer-tx signer flag on `encrypt_execute_account`s, which fails for our 6-input/3-output graph with fresh output keypairs. The on-chain DSL graph + program-side wiring are otherwise complete; closure waits on upstream or a vendored CPI helper.
+
+When you change `sdk/src/encrypt.ts` or `sdk/src/ika.ts`, run `pnpm -F @obsidian-desk/sdk test` (offline, ~120 ms) and then `node sdk/scripts/devnet-smoke.mjs` if the real-mode contract changed.
 
 ## Profiling FHE operations
 
-The mock CPI in `programs/obsidian-core/src/encrypt_cpi.rs` returns deterministic 100-byte placeholders, so its compute-unit cost is uninteresting. Once we swap to real Encrypt CPI in P3+, profile per-instruction cost with:
+`try_match` dispatches `match_orders_graph` via `EncryptContext` to the deployed Encrypt program. Profile per-instruction compute-unit cost with:
 
 ```bash
-solana logs | grep -E "consumed [0-9]+ of [0-9]+"
+solana logs --url devnet H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp | grep -E "consumed [0-9]+ of [0-9]+"
 ```
 
-Per-CT size for the current scaffold is `CT_MAX = 3000` bytes (gap E0 — Solana's CPI realloc cap is 10 240 B, divided across the three CT slots in `EncryptedOrder` plus the linked-list overhead).
+Account-size pressure: `EncryptedOrder` and `MatchIntent` now hold 32-byte ciphertext-account refs (`[u8; 32]`), not inline `Vec<u8>`. Real ciphertext bytes (~100 B each) live in keypair accounts owned by the Encrypt program, so the 10 240 B CPI realloc cap that drove `CT_MAX = 3000` is no longer the binding constraint. The constant is still in `state.rs` as a leftover relevant only to the residual mock path.
 
 ## Adding a new market
 
@@ -145,7 +177,8 @@ For the hackathon, stick with BTC/USDC.
 | Symptom | Fix |
 |---|---|
 | `TS2307: Cannot find module '@obsidian-desk/sdk'` | `pnpm -F @obsidian-desk/sdk build` (workspace types come from `dist/`, not source) |
-| `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` | A vendor package shipped uncompiled `.ts` — Node 24 won't strip from `node_modules`. Set `OBSIDIAN_*_MODE=mock` (the default) until the vendor publishes JS |
+| `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` | The `pnpm patch` wasn't applied — re-run `pnpm install`. Encrypt 0.1.1's `exports` field still points at uncompiled `./src/grpc.ts` upstream; the patch under `patches/` redirects it to `./dist/grpc.js`. Ika 0.1.1 is vendored at `sdk/src/ika-vendor/` because no compiled `dist/` exists upstream |
+| Module not found: `dns` / `fs` / `net` (in client bundle) | Something imported `@obsidian-desk/sdk` and pulled in `encrypt` or `ika` namespaces transitively. They are subpath-only — change to `@obsidian-desk/sdk/encrypt` or `@obsidian-desk/sdk/ika`. Server actions can use these subpaths; client components must not |
 | Mocha hangs forever on Anchor tests | Anchor's WS event listeners hang against a manually-spawned validator. Use `getTransaction(sig).meta.logMessages` parsing of `Program data:` lines instead — see `tests/obsidian-core.ts` `eventsFor()` helper |
 | `Failed to reallocate account data` | A ciphertext `Vec<u8>` exceeded `CT_MAX = 3000`. Solana's CPI realloc cap is 10 240 B for the whole account; the three CT slots + headers + linked-list pointer fight over that budget |
 | `Blockhash not found` on `--rpc` ops | Default `processed` commitment returns blockhashes the validator hasn't finalized. Build the provider explicitly with `commitment: 'confirmed', preflightCommitment: 'confirmed'` |

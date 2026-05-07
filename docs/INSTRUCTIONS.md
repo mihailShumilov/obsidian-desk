@@ -1,15 +1,17 @@
 # ObsidianDesk — Implementation Roadmap
 
+> **Status:** This is the original 6-week plan from kickoff. Most weeks have shipped — see the **Build progress** section in `README.md` for the current closure status, and `docs/gaps.md` for the per-gap state. Use this file when you're trying to understand the original acceptance criteria for a given week, not as a description of what the code looks like today.
+
 6-недельный план. Каждая неделя = goal, deliverables, acceptance criteria, known unknowns.
 
 ## Prerequisites (Week 0 — до старта)
 
 **Установить:**
-- Rust 1.93+ (stable toolchain, `rustup update stable`), Solana CLI latest (Agave — `sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"`), Anchor (0.31+)
-- Node.js 24+ (LTS-линия), pnpm 9+
-- Bitcoin Core testnet / signet wallet
+- Rust **1.94** stable (pinned via `rust-toolchain.toml`); Solana CLI latest (Agave — `sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"`); Anchor 1.0.2 (`cargo install anchor-cli@1.0.2 --locked` — НЕ через avm, он rate-limit'ится из CI).
+- Node.js 24 LTS, pnpm 9.15.4
+- Bitcoin Core testnet / signet wallet (по факту — публичный mempool.space signet API хватает для демо)
 - Claude Code или Cursor
-- Аккаунты: GitHub (private repo), Solana devnet keypair, Bitcoin signet keypair
+- Аккаунты: GitHub, Solana devnet keypair, Bitcoin signet keypair
 
 **Прочитать pre-alpha docs:**
 - `docs.ika.xyz` → Solana integration guide (dWallet lifecycle, policy API)

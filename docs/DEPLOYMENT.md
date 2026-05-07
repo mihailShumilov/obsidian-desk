@@ -2,32 +2,40 @@
 
 The canonical reference for putting ObsidianDesk in front of real users. The README has the 90-second story; this doc has the checklists, rollback procedures, and incident playbooks.
 
-> **Status (P11):** Today we have working dev + prod docker-compose stacks and an `anchor deploy` story for devnet. Vercel/Fly.io specifics are documented as the planned path; wiring real GitHub Actions secrets and pushing to those providers happens manually after the hackathon submission cutoff.
+> **Status:** Solana program live on devnet at `H25y…beLp` (Anchor 1.0.2 / Rust 1.94 build). Real-mode Encrypt + Ika SDK wired against pre-alpha gRPC. Production deployment runs the docker-compose stack on a single VPS behind Cloudflare DNS + Caddy (§6) — that path serves `obsidiandesk.app`. Vercel / Fly.io are documented alternatives but unused for the live demo.
 
 ## What's deployed where
 
 | Component | Deploy target | Pinned version / id |
 |---|---|---|
-| `obsidian-core` Solana program | devnet (manually via `anchor deploy`) | `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp` |
-| Frontend (`app/`) | (planned) Vercel; today: local Docker | n/a |
-| Keeper (`keeper/`) | (planned) Fly.io; today: local Docker | n/a |
-| Validator (dev only) | local container or host process | `anzaxyz/agave:stable` (x86 only) |
+| `obsidian-core` Solana program | Solana **devnet** | `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp` |
+| Encrypt program (vendor) | Solana devnet | `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` |
+| Encrypt gRPC | Encrypt pre-alpha | `pre-alpha-dev-1.encrypt.ika-network.net:443` |
+| Ika gRPC | Ika pre-alpha | `pre-alpha-dev-1.ika.ika-network.net:443` |
+| Frontend (`app/`) | self-hosted VPS + Cloudflare (§6); also runs locally via Docker | <https://obsidiandesk.app> |
+| Keeper (`keeper/`) | self-hosted VPS; also runs locally via Docker | n/a |
+| Validator (dev only) | local container (`--profile local-rpc`, x86 only) or host process | `anzaxyz/agave:latest` |
 
 ## 1. Solana program → devnet
 
 ### 1.1 Pre-deploy checklist
 
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` is clean
-- [ ] `anchor test` passes (5 suites, ~11 s)
-- [ ] `pnpm -F @obsidian-desk/sdk test` passes (26 cases)
-- [ ] The program-id literal in `programs/obsidian-core/src/lib.rs` `declare_id!()` matches `Anchor.toml [programs.devnet] obsidian_core` (CI catches mismatches via `anchor build`'s checksum)
+- [ ] `cargo clippy --workspace -- -D warnings` is clean (we deliberately drop `--all-targets` to skip the `idl-build` cfg — see CI rationale)
+- [ ] `anchor test` passes (4 e2e suites + program tests)
+- [ ] `pnpm -F @obsidian-desk/sdk test` passes (offline, ~120 ms)
+- [ ] The program-id literal in `programs/obsidian-core/src/lib.rs` `declare_id!()` matches `Anchor.toml [programs.devnet] obsidian_core`
 - [ ] You have a backup of the upgrade authority keypair; loss = irreversible loss of the ability to redeploy at the same address
 - [ ] Devnet wallet has at least 5 SOL (`solana balance --url devnet`)
+- [ ] `anchor-cli` installed at 1.0.2 (`anchor --version` → `anchor-cli 1.0.2`). Install via `cargo install anchor-cli@1.0.2 --locked`; do **not** use avm.
 
 ### 1.2 Deploy
 
 ```bash
-anchor build
+anchor build --no-idl --ignore-keys
+# `--no-idl` because v1's IDL build is a separate `anchor idl build` step.
+# `--ignore-keys` because target/deploy/obsidian_core-keypair.json is gitignored
+# per-developer; the source-of-truth program id is the declare_id!() in lib.rs.
+
 anchor deploy --provider.cluster devnet
 # capture the printed Program ID — should equal the declare_id!()
 ```
@@ -134,11 +142,17 @@ lockPolicy). Each line shows the real-mode artifact (ciphertext id,
 btc address) returned by devnet.
 
 **What's still pending in real mode** (tracked in `docs/gaps.md`):
-- E1, E2, E3, E4: the on-chain program still uses inline `Vec<u8>` ciphertexts
-  and a synchronous mock `request_threshold_decrypt`. Real `execute_graph`
-  CPI + async `request_decryption` flow is the next milestone.
-- I1: lockPolicy doesn't yet write to the on-chain Ika program — it
+- **E2-residual** — `try_match → execute_graph` CPI fails at depth 2 with a
+  signer/writable demotion in `encrypt-anchor` 0.1.0's `invoke_execute_graph`.
+  The on-chain DSL graph (`match_orders_graph` via `#[encrypt_fn]`) and the
+  22-account instruction shape are complete; closure is upstream-blocked or
+  needs a vendored CPI helper.
+- **I1** — `lockPolicy` doesn't yet write to the on-chain Ika program; it
   stores the policy intent in the SDK process for the keeper to pick up.
+- **I3** — `finalize_settlement` is permissionless (no keeper-authority
+  PDA gate). Will land paired with SPV proof verification.
+
+E1, E3, E4, E5, I0 are **closed** — `EncryptedOrder` holds 32-byte ciphertext refs, settlement is split into `request_decryption` + `finalize_decryption` with on-chain digest verification, and the upstream Encrypt + Ika gRPC clients run via `pnpm patch` + vendoring respectively.
 
 The `assertNotMockOnMainnet` boot guard remains the backstop against
 running mock mode against any mainnet RPC.

@@ -16,7 +16,7 @@
     "anchor:build": "anchor build",
     "anchor:test": "anchor test",
     "cargo:check": "cargo check --workspace",
-    "cargo:clippy": "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo:clippy": "cargo clippy --workspace -- -D warnings",
     "test:sdk": "pnpm -F @obsidian-desk/sdk test",
     "test": "pnpm -r test",
     "seed:demo": "pnpm exec tsx scripts/seed-demo.ts",

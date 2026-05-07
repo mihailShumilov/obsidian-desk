@@ -73,10 +73,10 @@ This is the defining moat. The brief rewards this exactly (Core Integration crit
 
 ### 5.1 Solana Program (`obsidian-core`)
 
-**Framework:** Anchor 0.31+ (faster to develop than Pinocchio; can switch later).
-**Program ID:** `ObsiDesK...` (placeholder, generate at build).
+**Framework:** Anchor 1.0.2 on Rust 1.94 (pinned in `rust-toolchain.toml`). The program depends on `encrypt-anchor` from `dwallet-labs/encrypt-pre-alpha`, which requires the Anchor 1.x macro toolchain. The TypeScript side stays on `@coral-xyz/anchor@^0.32.1` because no v1 JS SDK has shipped yet — 0.32.1 parses the v1 IDL cleanly for our usage.
+**Program ID (devnet):** `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`. Pinned in `Anchor.toml [programs.devnet]`, `[programs.localnet]`, and `declare_id!()` in `lib.rs`.
 
-**Accounts:**
+**Accounts (current, post gap E1 closure):**
 
 ```rust
 #[account]
@@ -88,17 +88,16 @@ pub struct MarketState {
     pub settle_vault: Pubkey,    // USDC vault
     pub ika_policy: Pubkey,      // dWallet policy account on Ika
     pub match_count: u64,
-    pub total_volume_cipher: Vec<u8>, // encrypted total volume (bragging rights)
 }
 
 #[account]
 pub struct EncryptedOrder {
     pub owner: Pubkey,
     pub dwallet_id: Pubkey,           // BTC dWallet ref on Ika
-    // FHE ciphertexts:
-    pub side_ct: Vec<u8>,             // 0 = bid, 1 = ask (1-bit encrypted)
-    pub price_ct: Vec<u8>,            // u64 encoded as FHE ciphertext
-    pub size_ct: Vec<u8>,             // u64 encrypted
+    // Encrypt ciphertext-account references (32 B Pubkey-shaped ids):
+    pub side_ct: [u8; 32],            // 0 = bid, 1 = ask (1-bit encrypted)
+    pub price_ct: [u8; 32],           // u64 encoded as FHE ciphertext
+    pub size_ct: [u8; 32],            // u64 encrypted
     pub expiry_slot: u64,             // plaintext (expiry is not secret)
     pub nonce: [u8; 16],
     pub next: Option<Pubkey>,         // linked-list next
@@ -106,41 +105,63 @@ pub struct EncryptedOrder {
 }
 ```
 
+The on-chain ciphertexts are *references* to Encrypt-program-owned ciphertext accounts, not inline blobs. Real ciphertext bytes live in `~100 B` accounts owned by the Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` (devnet). This closes gap E1 and makes E0 (`CT_MAX = 3000`) a leftover constant relevant only to the residual mock path.
+
 **Instructions:**
 
 ```rust
-submit_order(ct_blob: EncryptedOrderBlob)   // trader encrypts client-side
+submit_order(ct_blob: EncryptedOrderBlob)              // trader encrypts client-side, passes 3 ct refs
 cancel_order(order: Pubkey)
-try_match(order_a: Pubkey, order_b: Pubkey)   // permissionless keeper call
-request_settlement(match_id: u64)             // after match, initiates dWallet sign
-finalize_settlement(match_id: u64, btc_tx_proof: Vec<u8>)
+try_match(order_a, order_b, output_ct_a, output_ct_b, output_ct_c)
+                                                       // permissionless keeper call; dispatches the
+                                                       // #[encrypt_fn] match_orders_graph DSL via
+                                                       // EncryptContext to Encrypt's execute_graph CPI
+request_decryption(match_id: u64)                      // keeper-only; snapshots the 3 output ct
+                                                       // digests onto MatchIntent, emits DecryptionRequested
+finalize_decryption(match_id, can_match, fill_size,    // keeper-only; verifies snapshotted digests,
+                    clearing_price, seller_is_a)        // writes MatchRecord, closes MatchIntent
+finalize_settlement(match_id: u64, btc_tx_proof: Vec<u8>) // keeper-only; verifies BTC settlement
 ```
 
-**Matching logic:**
+The match-then-decrypt-then-settle path is the closure of gaps E2 + E3 + E4. The keeper performs threshold decryption off-chain via gRPC `readCiphertext` between `try_match` and `finalize_decryption`, but the on-chain digest snapshot binds the plaintexts the keeper submits to the exact ciphertext accounts that `try_match` matched — the keeper cannot lie about the result.
 
-`try_match(a, b)` computes on ciphertext:
-1. `a.side != b.side` (opposite sides) — FHE XOR, compare to 1
-2. `a.price >= b.price` (if a = buy) or reverse — FHE comparator
-3. `min(a.size, b.size)` — FHE min
-4. Result: `can_match` bit, `fill_size` ciphertext, `clearing_price` ciphertext
+**Matching logic** — defined as a `#[encrypt_fn]` DSL graph in `programs/obsidian-core/src/lib.rs`:
 
-If `can_match` decrypts to 1 (via threshold decrypt trigger), emit `MatchEvent` with decrypted matched fields; remainders stay encrypted.
+```rust
+#[encrypt_fn]
+fn match_orders_graph(
+    a_side: EBool, a_price: EUint64, a_size: EUint64,
+    b_side: EBool, b_price: EUint64, b_size: EUint64,
+) -> (EBool, EUint64, EUint64) {
+    let opp = a_side ^ b_side;
+    let a_is_bid = !a_side;
+    let bid_price = if a_is_bid { a_price } else { b_price };
+    let ask_price = if a_is_bid { b_price } else { a_price };
+    let crosses = bid_price >= ask_price;
+    let can_match = opp & crosses;
+    let fill = a_size.min(b_size);
+    let clearing = (a_price + b_price) / 2u64;
+    (can_match, fill, clearing)
+}
+```
+
+`try_match` builds an `EncryptContext` and dispatches `ctx.match_orders_graph(...)` — a real `execute_graph` CPI to the Encrypt program. The Solana program never sees plaintext.
+
+`request_decryption(match_id)` snapshots the three output ciphertext digests onto `MatchIntent`. The keeper performs three independent off-chain `readCiphertext` gRPC calls and submits the verified plaintexts to `finalize_decryption`. `finalize_decryption` refuses if `can_match == false` and writes a `MatchRecord`; both ledger transitions live behind the keeper authority.
 
 ### 5.2 Encrypt integration
 
-**SDK:** Encrypt TypeScript SDK for client-side encryption, Encrypt on-chain primitives (CPI from `obsidian-core` to `encrypt-core` program).
+**SDK side:** the project consumes `@encrypt.xyz/pre-alpha-solana-client@0.1.1` via a `pnpm patch` (the published package's `exports` field still points at uncompiled `./src/grpc.ts`; the patch redirects it to `./dist/...js` and rewrites the extension-less imports). `sdk/src/encrypt.ts` real-mode dispatches `encryptU64`, `encryptSide`, `encryptOrder` to `createEncryptClient(...).createInput(...)`. Each input returns a 32-byte ciphertext-account identifier on Solana — the same `[u8; 32]` shape that `EncryptedOrder.{side,price,size}_ct` stores.
+
+**Program side:** the Anchor program pulls `encrypt-anchor` + `encrypt-solana-dsl` from `dwallet-labs/encrypt-pre-alpha`. The `#[encrypt_fn]` macro expands the matching graph into the bytecode that `EncryptContext::match_orders_graph(...)` dispatches via CPI to the deployed Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` on devnet.
 
 **Ciphertext types used:**
-- `EncU1` — 1-bit (side)
-- `EncU64` — 64-bit (price in sats per USDC, size in sats)
+- `EBool` — 1-bit (side)
+- `EUint64` — 64-bit (price in sats per USDC, size in sats)
 
-**Operations needed on program side:**
-- `enc_xor(a, b)`, `enc_eq(a, b)` — side check
-- `enc_gte(a, b)` — price comparison
-- `enc_min(a, b)` — fill size
-- `threshold_decrypt_request(ct, policy)` — reveal matched fields
+**Operations exercised by `match_orders_graph`:** XOR, NOT, ternary select (`if`), GTE, AND, MIN, ADD, DIV-by-constant.
 
-**Note on FHE performance:** single comparison on ciphertext currently ≈ 50–500ms on MPC network. Keep book depth small (≤16 active orders) for MVP. Matching is triggered permissionlessly by keepers — not on every block.
+**Note on FHE performance:** single comparison on ciphertext currently runs ~50–500 ms on the Encrypt MPC network. The whole match graph is dispatched in a single `execute_graph` call; keep book depth small (≤16 active orders) for MVP and keep matching permissionless / keeper-triggered, not per-block.
 
 ### 5.3 Ika dWallet integration
 
@@ -169,19 +190,24 @@ When `obsidian-core::finalize_settlement` emits SettleEvent(match_id, to, amount
 
 **Atomicity caveat:** true atomic cross-chain is hard. For MVP use HTLC-style or timeout-fallback: if BTC tx doesn't confirm in N blocks, USDC refund.
 
+### 5.3.1 Ika integration (SDK side)
+
+`@ika.xyz/pre-alpha-solana-client` ships only `.ts` sources (no compiled `dist/`), so a `pnpm patch` doesn't help. Closure of gap I0: vendored `src/grpc.ts`, `src/bcs-types.ts`, and `src/generated/grpc/ika_dwallet.ts` (~1100 LOC) into `sdk/src/ika-vendor/` with two project-specific edits — `curve: { Secp256k1: true }` and `signature_algorithm: { ECDSASecp256k1: true }` so the dWallet matches Bitcoin's signature scheme. Default gRPC URL is `pre-alpha-dev-1.ika.ika-network.net:443`. License notices preserved verbatim (`BSD-3-Clause-Clear`, `Copyright (c) dWallet Labs, Ltd.`).
+
+`sdk/src/ika.ts` real-mode dispatches `createDWallet → requestDKG`, deriving a P2WPKH signet address from the returned secp256k1 public key. `requestSign` chains `requestPresign → requestSign` against the same client.
+
 ### 5.4 Frontend (Next.js 16.2 app router)
 
 See `UI_DESIGN.md` for full design spec. Technical stack:
-- Next.js 16.2 + React 18 + TypeScript 5.9 (strict)
-- Tailwind CSS + shadcn/ui (custom cypherpunk theme)
+- Next.js 16.2 + **React 19.1** + TypeScript 5.9 (strict)
+- Tailwind CSS + custom obsidian design tokens
 - framer-motion (animations)
-- @react-three/fiber + drei (3D hero, optional if time)
-- zustand (state)
-- @solana/web3.js, @coral-xyz/anchor
-- @ika.xyz/sdk, @encrypt.xyz/sdk (placeholder names, see Note below)
-- @tanstack/react-query (order polling)
+- @react-three/fiber@^9 + drei@^10 (3D hero — Encrypted Book Cube)
+- zustand (state, with persist middleware for the dWallet store)
+- @solana/web3.js, @coral-xyz/anchor@^0.32.1
+- @obsidian-desk/sdk (workspace package; `encrypt` + `ika` namespaces are subpath imports — `import * as encrypt from '@obsidian-desk/sdk/encrypt'` — to keep gRPC pulling code out of the client bundle)
 
-**Note on SDK names:** at time of writing, Ika and Encrypt pre-alpha SDK package names may differ. Resolve from `docs.ika.xyz` and `docs.encrypt.xyz` (pre-alpha docs) at kickoff. All code should isolate SDK calls behind a thin `lib/ika.ts` and `lib/encrypt.ts` adapter to swap if API changes.
+**React 19 is mandatory.** Next 16 ships React 19.3-canary to the client regardless of the app's declared `react` version; with React 18 declared, `react-reconciler@0.27.0` (pulled by `@react-three/fiber@8`) crashes at module-eval against the renamed `React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentBatchConfig`. Matching deps: `@react-three/fiber@^9`, `@react-three/drei@^10`, `@types/react@^19`, `@types/react-dom@^19`. React 19 also drops the global `JSX` namespace — `app/global.d.ts` re-exports it from `react`.
 
 ## 6. Data flow — happy path
 
@@ -231,29 +257,32 @@ Trader A    Trader B    Solana Program    Encrypt MPC    Ika MPC    Bitcoin
    │◀─ filled ─┼─────────────│                             │           │
 ```
 
-## 8. Devnet assumptions & mocks
+## 8. Devnet endpoints
 
-- **Bitcoin:** use Bitcoin testnet (signet preferred for fast blocks); dWallet on Ika operates on testnet.
-- **Solana:** devnet for obsidian-core + Encrypt pre-alpha + Ika pre-alpha.
+- **Bitcoin:** signet via mempool.space esplora API (`https://mempool.space/signet/api`). dWallets live on the Ika network; the BTC leg is recorded against signet for demoability.
+- **Solana:** devnet for `obsidian-core` (`H25y…beLp`) + Encrypt program (`4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8`).
+- **Encrypt gRPC:** `pre-alpha-dev-1.encrypt.ika-network.net:443` (override via `OBSIDIAN_ENCRYPT_GRPC_URL`).
+- **Ika gRPC:** `pre-alpha-dev-1.ika.ika-network.net:443` (override via `OBSIDIAN_IKA_GRPC_URL`).
 - **Price oracle:** Pyth on Solana for USD price display (not for matching — matching uses user prices only).
-- **Keeper:** simple Node.js cron bot; any user can also trigger via UI "Try match" button for demo.
+- **Keeper:** Node 24 daemon; `pollOnce` runs every 3 s by default (configurable via `KEEPER_POLL_MS`). The match cycle is also exposed as a one-shot CLI: `tsx keeper/scripts/match-pair.ts <market> <a> <b>`.
 
-## 9. What ships in MVP (hackathon scope, 6 weeks)
+## 9. Build status (vs. original 6-week MVP scope)
 
-Must-have:
-- [x] Solana program with submit/cancel/try_match/settle
-- [x] Client-side FHE encryption of orders
-- [x] On-chain FHE comparator (at least price_gte + size_min)
-- [x] dWallet creation flow for BTC testnet
-- [x] Policy-gated settlement of BTC → buyer address
+Must-have — **shipped:**
+- [x] Solana program with submit/cancel/try_match/decryption-flow/settle
+- [x] Client-side FHE encryption of orders (real-mode against devnet)
+- [x] On-chain FHE matching graph (`match_orders_graph` via `#[encrypt_fn]`)
+- [x] dWallet creation flow for BTC signet (real DKG via Ika gRPC in `OBSIDIAN_IKA_MODE=real`)
+- [x] Policy-gated settlement scaffolding
 - [x] Next.js app with killer UI (see UI_DESIGN.md)
-- [x] E2E demo: A + B submit, match, BTC moves on testnet
+- [x] E2E demo (mock-mode end-to-end, `e2e-full.ts`)
 
-Nice-to-have (if time):
-- [ ] 3D orderbook visualization
+Open / residual:
+- [ ] **E2-residual** — `execute_graph` CPI fails at depth 2 with a signer demotion in `encrypt-anchor` 0.1.0; tracks closure on upstream (or vendor + adapt the helper)
 - [ ] Partial fill handling
 - [ ] Multiple markets (ETH, SOL variants)
-- [ ] SPV-proof verification of BTC tx on Solana (real atomicity)
+- [ ] SPV-proof verification of BTC tx on Solana (true atomicity) — gap I3
+- [ ] On-chain keeper-authority gate paired with the SPV check (intentionally bundled — see I3)
 
 Explicitly out of scope:
 - Mainnet deployment
@@ -281,100 +310,64 @@ If solo: forget 3D hero, stay with 2D wow; cut to 3 screens max.
 
 ## 12. Dockerization & deployment
 
-Всё окружение контейнеризовано. Любой разработчик должен уметь поднять full-stack на ноутбуке одной командой `docker compose up`.
+Operational details and runbooks live in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md). This section covers the architecture-level shape of the container layout.
 
-### 12.1 Контейнеры
+### 12.1 Containers
 
-| Сервис | Базовый image | Назначение | Экспонируемые порты |
+| Service | Base image | Purpose | Exposed ports (host) |
 |---|---|---|---|
-| `app` | `node:24-alpine` multi-stage | Next.js 16.2 frontend | 3000 |
-| `keeper` | `node:24-alpine` multi-stage | Matching bot (Node.js + TS 5.9) | 3001 (status endpoint) |
-| `anchor-builder` | `projectserum/build:v0.31.0` | Build-only, production artifacts | — |
-| `solana-validator` | `anzaxyz/agave:latest` | Local test-validator для dev/CI (Agave — преемник Solana Labs client) | 8899, 8900 |
-| `encrypt-mock` | custom, из `docker/mock-encrypt/` | Local Encrypt RPC stub для dev | 7000 |
-| `ika-mock` | custom, из `docker/mock-ika/` | Local Ika RPC stub для dev | 7001 |
-| `btc-signet` | `ruimarinho/bitcoin-core:26` в signet mode | Локальный signet node | 18332 |
-| `mempool-space` | `mempool/backend:latest` | Local block explorer API (опционально) | 8999 |
+| `app` | `node:24-alpine` multi-stage | Next.js 16.2 standalone server | 13000 |
+| `keeper` | `node:24-alpine` multi-stage | Matching + settlement daemon (Node 24 + tsx in dev, compiled JS in prod) | 13001 (`/status` endpoint) |
+| `solana-validator` | `anzaxyz/agave:latest` | **Opt-in** local test-validator (`docker compose --profile local-rpc up`). Linux/amd64 only — Agave doesn't ship arm64 and panics under qemu emulation. M-series Macs run the validator on the host. | 18899 (RPC), 18900 (WS) |
 
-### 12.2 Dockerfile'ы (multi-stage pattern)
+There is no `encrypt-mock` / `ika-mock` / `btc-signet` container. Encrypt / Ika real-mode hits the upstream pre-alpha gRPC services on devnet; mock-mode is in-process and needs no daemon. Bitcoin is read via mempool.space's public esplora API.
 
-**`app/Dockerfile`** (Next.js standalone output):
-- Stage 1 `deps`: `pnpm install --frozen-lockfile` + prune dev deps
-- Stage 2 `builder`: `pnpm build` → `.next/standalone` + `.next/static`
-- Stage 3 `runner`: `node:24-alpine`, non-root user `nextjs:nodejs`, копирует только `standalone/` + `static/` + `public/`, размер ~150 MB
-- `next.config.ts`: `output: "standalone"` обязательно
-- Healthcheck: `GET /api/health` → 200
+### 12.2 Dockerfiles (multi-stage pattern)
 
-**`keeper/Dockerfile`**:
-- Build stage компилит TS → JS через `tsc` + `esbuild` bundle
-- Runtime `node:24-alpine` с `tini` для graceful SIGTERM
-- Env-driven config (см. §12.4)
+**`app/Dockerfile`** — Next.js 16 standalone output. `pnpm install --frozen-lockfile` → `pnpm build` → copy `standalone/` + `static/` + `public/` into a slim runner. Final image ≈ 313 MB (three.js is dynamically loaded, so it isn't in the initial bundle). `next.config.ts` carries `output: "standalone"`. Healthcheck: `GET /api/health` → 200.
 
-**`programs/obsidian-core/Dockerfile`** (build-only):
-- `projectserum/build:v0.31.0` → `anchor build --verifiable`
-- Output: `target/deploy/obsidian_core.so` + IDL копируются в `dist/`
-- Используется в CI и для reproducible builds при submission
+**`keeper/Dockerfile`** — `pnpm -F @obsidian-desk/sdk build` first (workspace types), then `pnpm -F @obsidian-desk/keeper build`. Runtime is `node:24-alpine` with `tini` for graceful SIGTERM. Mounts the keeper keypair via Docker secrets at `/run/secrets/keeper_keypair.json`. Final image ≈ 924 MB (`@coral-xyz/anchor` deps).
+
+**Anchor program** — built directly on the host via `cargo install anchor-cli@1.0.2 --locked`. No dedicated Dockerfile: the Anchor 1 toolchain is small and CI uses the published cargo binary. (We deliberately do NOT use `avm` — it has historically rate-limited from CI runners.)
 
 ### 12.3 docker-compose
 
-Два compose-файла:
-- `docker-compose.yml` — dev окружение (hot reload, local validators + mocks)
-- `docker-compose.prod.yml` — production-like (от devnet RPC, mainnet-ready config)
+Two compose files:
+- `docker-compose.yml` — dev-friendly defaults. Profile `local-rpc` opts into the in-container validator on x86 Linux.
+- `docker-compose.prod.yml` — overlay that pulls images from GHCR (`IMAGE_TAG=v0.x.y`) and removes any local validator.
 
-Dev-compose поднимает: `solana-validator`, `encrypt-mock`, `ika-mock`, `btc-signet`, `app` (в dev mode с bind mount), `keeper` (в watch mode). Named volumes для persistence: `solana-ledger`, `btc-data`.
+Bring-up sequence on M-series Macs (the common case for the team):
 
-Prod-compose: только `app` + `keeper`, networking через внешние endpoints (`SOLANA_RPC`, `ENCRYPT_RPC`, `IKA_RPC`), без локальных validators.
+1. `solana-test-validator --rpc-port 18899 --bind-address 127.0.0.1 --reset` (host process)
+2. `anchor build && anchor deploy --provider.cluster http://127.0.0.1:18899`
+3. `pnpm docker:up` — wraps `scripts/docker-bootstrap.sh`, generates a keeper keypair if missing, ups the stack, waits for healthchecks.
 
 ### 12.4 Environment variables
 
-Все секреты через `.env` (в `.gitignore`) + `.env.example` (в repo с placeholder'ами):
-```
-# Solana
-SOLANA_RPC=https://api.devnet.solana.com
-SOLANA_WS=wss://api.devnet.solana.com
-PROGRAM_ID=<deploy-output>
-ADMIN_KEYPAIR_PATH=/run/secrets/admin.json
+`.env.example` ships at repo root with every variable annotated. Highlights:
 
-# Encrypt
-ENCRYPT_RPC=https://devnet.encrypt.xyz
-ENCRYPT_PROGRAM_ID=<from-docs>
+| Variable | Purpose |
+|---|---|
+| `OBSIDIAN_PROGRAM_ID` / `NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID` | Pinned program id; must match `Anchor.toml` + `declare_id!()` |
+| `NEXT_PUBLIC_SOLANA_RPC`, `ANCHOR_PROVIDER_URL`, `SOLANA_RPC` | RPC endpoints (browser, server-side, docker-internal alias) |
+| `OBSIDIAN_ENCRYPT_MODE`, `OBSIDIAN_IKA_MODE` | `mock` (default) / `real` (live devnet gRPC) |
+| `OBSIDIAN_ENCRYPT_GRPC_URL`, `OBSIDIAN_IKA_GRPC_URL` | Override Encrypt / Ika gRPC endpoints |
+| `KEEPER_*` (`POLL_MS`, `PORT`, `FEERATE`, `KEYPAIR_PATH`, `DEBUG`) | Keeper tunables |
+| `IMAGE_TAG` | GHCR tag pulled by the prod overlay |
 
-# Ika
-IKA_RPC=https://devnet.ika.xyz
-IKA_PROGRAM_ID=<from-docs>
-
-# Bitcoin
-BTC_NETWORK=signet
-MEMPOOL_API=https://mempool.space/signet/api
-
-# Keeper
-KEEPER_KEYPAIR_PATH=/run/secrets/keeper.json
-LOG_LEVEL=info
-```
-
-Docker secrets (`/run/secrets/*`) для keypair файлов, не bind-mount плейнтекстом.
+Docker secrets path (`/run/secrets/keeper_keypair.json`) is preferred over bind-mount; never commit real keypairs.
 
 ### 12.5 Production deploy
 
-| Компонент | Где деплоится |
-|---|---|
-| Solana program | `anchor deploy --provider.cluster devnet` (через CI job, verifiable build) |
-| Next.js app | Vercel (primary, zero-config с Next 16.2) + Docker image на Fly.io как fallback |
-| Keeper | Fly.io (`fly launch`) или Railway — 1 экземпляр, 512 MB RAM достаточно |
-| Mocks (`encrypt-mock`, `ika-mock`) | Только локально — в prod заменяются реальными Encrypt+Ika devnet |
+The hackathon submission targets a **single VPS + Cloudflare DNS + Caddy** path (full runbook in `DEPLOYMENT.md` §6). Self-hosting the compose stack on one Hetzner / DigitalOcean / OVH / Vultr box at ~$5/mo lands the live demo on `obsidiandesk.app` without per-service platform accounts.
 
-Для hackathon submission production = Vercel + Fly.io keeper + devnet deployed program. Все три шага автоматизированы через GitHub Actions workflow `deploy.yml` (runs on tag push).
+Vercel / Fly.io are documented as planned alternatives but unused for the submission — the compose stack is portable and the VPS path lets the keeper and the app sit on one machine, which makes incident response simpler at hackathon scale.
 
 ### 12.6 CI/CD
 
-`.github/workflows/ci.yml` запускает в Docker:
-- `anchor-builder` образ собирает программу, сравнивает checksum с предыдущим артефактом
-- `app` + `keeper` стадии `pnpm typecheck` + `pnpm build` + `pnpm test`
-- Integration tests против `solana-validator` + `encrypt-mock` + `ika-mock` контейнеров
+`.github/workflows/ci.yml` runs two jobs against every push to `main`:
 
-`.github/workflows/deploy.yml` на push tag `v*.*.*`:
-- Build Docker images → push в GHCR
-- Anchor deploy → devnet
-- Vercel deploy → production
-- Fly.io keeper deploy → production
-- Создаёт GitHub Release с changelog
+- `ts` — `pnpm install` → `pnpm -F @obsidian-desk/sdk build` (so workspace types resolve) → `pnpm -r typecheck` → `pnpm -r build`.
+- `rust` — pin Rust 1.94 + clippy/rustfmt → install Solana CLI → `cargo install anchor-cli@1.0.2 --locked` → `cargo clippy --workspace -- -D warnings` (no `--all-targets` to avoid the `idl-build` cfg) → `anchor build --no-idl --ignore-keys` (`--ignore-keys` because the program keypair is gitignored; the source-of-truth program id is `declare_id!()`).
+
+The `pnpm patch` for `@encrypt.xyz/pre-alpha-solana-client@0.1.1` is committed under `patches/` and re-applied by pnpm on every install.

@@ -24,7 +24,7 @@ Encrypted orderbook (FHE, [Encrypt](https://docs.encrypt.xyz)) + native BTC sett
 8. [Repository layout](#repository-layout)
 9. [Environment variables](#environment-variables)
 10. [Troubleshooting](#troubleshooting)
-11. [P-prompt progress](#p-prompt-progress)
+11. [Build progress](#build-progress)
 12. [Known gaps](#known-gaps)
 13. [License](#license)
 
@@ -87,12 +87,12 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and [`doc
 
 | Layer | Tech |
 |---|---|
-| Solana program | Rust 1.93 + Anchor 0.32.1 (`programs/obsidian-core`) |
-| Shared SDK | TypeScript 5.9 (`sdk/`) — adapters for Encrypt + Ika + bitcoinjs-lib |
-| Frontend | Next.js 16.2 App Router + React 18.3 + Tailwind 3.4 (`app/`) |
-| Keeper bot | Node.js 24 daemon (`keeper/`) |
-| Bitcoin | signet via mempool.space esplora |
-| Tooling | pnpm 9 workspaces, Solana CLI (Agave), Anchor |
+| Solana program | Rust 1.94 + Anchor 1.0.2 (`programs/obsidian-core`) — pulls `encrypt-anchor` for the `#[encrypt_fn]` DSL |
+| Shared SDK | TypeScript 5.9 (`sdk/`) — adapters for Encrypt + Ika + bitcoinjs-lib (Encrypt + Ika real-mode wired against pre-alpha gRPC on devnet) |
+| Frontend | Next.js 16.2 App Router + React 19.1 + Tailwind 3.4 (`app/`) |
+| Keeper bot | Node.js 24 daemon (`keeper/`) — drives `try_match → request_decryption → finalize_decryption → finalize_settlement` |
+| Bitcoin | signet via mempool.space esplora; native settlement via Ika 2PC-MPC dWallets (no bridge / no wrapping) |
+| Tooling | pnpm 9.15.4 workspaces, Solana CLI (Agave), `anchor-cli@1.0.2` (`cargo install`, not avm) |
 
 ## Run via Docker (recommended)
 
@@ -157,7 +157,7 @@ Full deployment runbook (rollback, monitoring, security checklist, cost estimate
 
 For hot-reload iteration on a single service.
 
-**Prereqs:** Node.js 24+, pnpm 9.15.4, Rust 1.93 stable, Solana CLI (Agave), Anchor 0.32.1.
+**Prereqs:** Node.js 24+, pnpm 9.15.4, Rust 1.94 stable (pinned via `rust-toolchain.toml`), Solana CLI (Agave), `anchor-cli@1.0.2` — install with `cargo install anchor-cli@1.0.2 --locked`. We do **not** use `avm` — anchor-cli 1.0+ is published directly on crates.io and `avm` historically rate-limits from CI.
 
 ```bash
 # Install + emit SDK types so workspace deps resolve
@@ -188,7 +188,7 @@ Common workspace commands:
 | `pnpm test:sdk` | 26 SDK unit tests, ~120 ms, no network |
 | `pnpm anchor:build` | build the Solana program |
 | `pnpm anchor:test` | full anchor + e2e suite (5 tests, ~11 s; needs validator) |
-| `pnpm cargo:clippy` | clippy with `-D warnings` |
+| `pnpm cargo:clippy` | clippy with `-D warnings`. Note: drops `--all-targets` so the `idl-build` cfg never gets compiled — the macro-generated IDL build trips lints we can't fix from outside `encrypt-anchor` / `anchor-lang`. |
 | `pnpm seed:demo` | bootstrap a fresh market + dWallets + 8 orders |
 | `pnpm docker:up` / `pnpm docker:down` | full-stack docker convenience wrappers |
 
@@ -197,7 +197,7 @@ Detailed per-workspace debugging tips: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.
 ## Tests
 
 ```bash
-# SDK unit tests (26 tests, ~120 ms, zero network)
+# SDK unit tests (~120 ms, zero network)
 pnpm -F @obsidian-desk/sdk test
 
 # Anchor + e2e (requires a running validator; anchor build first)
@@ -206,9 +206,23 @@ anchor test --skip-local-validator
 #   ├─ e2e-submit.ts            — encrypt → submit → byte-equality
 #   ├─ e2e-settlement.ts        — one-leg mock settlement (P4)
 #   └─ e2e-full.ts              — two-leg Alice/Bob settlement (P9)
+
+# Real-mode devnet smoke (hits live Encrypt + Ika gRPC, costs network calls)
+pnpm -F @obsidian-desk/sdk build
+node sdk/scripts/devnet-smoke.mjs
+#   ├─ encryptU64    → 32-byte ciphertext id
+#   ├─ encryptOrder  → 3 fresh 32-byte ids (side, price, size)
+#   ├─ createDWallet → real DKG'd P2WPKH signet address
+#   └─ lockPolicy    → on-chain Solana policy account
+
+# Keeper matching loop against the deployed devnet program
+ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
+  ANCHOR_WALLET=~/.config/solana/keeper.json \
+  tsx keeper/scripts/devnet-bootstrap.ts        # create market + 2 opposite-side orders
+tsx keeper/scripts/match-pair.ts <market> <a> <b>   # drives try_match → request_decryption → finalize_decryption
 ```
 
-CI runs the same TypeScript + Anchor checks against every push to `main` — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and the badge above.
+CI runs `pnpm typecheck` + `pnpm -r build` + `cargo clippy --workspace -- -D warnings` + `anchor build --no-idl --ignore-keys` against every push to `main` — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and the badge above. The devnet smoke test is **not** in CI (it costs real network round-trips against the pre-alpha gRPC services).
 
 ## Demo flow
 
@@ -250,8 +264,11 @@ Copy [`.env.example`](.env.example) — every variable with comments. Summary:
 | `OBSIDIAN_PROGRAM_ID` / `NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID` | yes | `H25y…beLp` (devnet) | Pinned program id; must match `Anchor.toml` + `declare_id!()` | app, keeper, scripts |
 | `NEXT_PUBLIC_NETWORK` | no | `devnet` | Label rendered in the header chip | app |
 | `OBSIDIAN_ESPLORA_URL` | no | `https://mempool.space/signet/api` | esplora-style API base for the deposit balance poll | app server actions |
-| `OBSIDIAN_ENCRYPT_MODE` | no | `mock` | `mock` (default) or `real` (throws until upstream package compiles, gap E5) | sdk |
-| `OBSIDIAN_IKA_MODE` | no | `mock` | Same pattern as Encrypt mode | sdk |
+| `OBSIDIAN_ENCRYPT_MODE` | no | `mock` | `mock` (offline, deterministic) or `real` (live Encrypt gRPC against Solana devnet) | sdk |
+| `OBSIDIAN_IKA_MODE` | no | `mock` | `mock` (local secp256k1 keygen) or `real` (live Ika gRPC, full DKG ceremony) | sdk |
+| `OBSIDIAN_ENCRYPT_GRPC_URL` | no | `pre-alpha-dev-1.encrypt.ika-network.net:443` | Override Encrypt gRPC endpoint (real-mode only) | sdk |
+| `OBSIDIAN_ENCRYPT_PROGRAM_ID` | no | `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` | Encrypt program id on devnet (real-mode only) | sdk |
+| `OBSIDIAN_IKA_GRPC_URL` | no | `pre-alpha-dev-1.ika.ika-network.net:443` | Override Ika gRPC endpoint (real-mode only) | sdk |
 | `KEEPER_POLL_MS` | no | `3000` | Match-poll interval | keeper |
 | `KEEPER_PORT` | no | `13001` (host) / `3001` (container) | `/status` endpoint port | keeper |
 | `KEEPER_FEERATE` | no | `4` | BTC fee rate (sat/vB) for settlement txs | keeper |
@@ -325,28 +342,60 @@ The persisted zustand store hydrates client-side only. Render a skeleton on firs
 </details>
 
 <details>
-<summary><strong>Real-mode <code>VendorSDKUnavailableError</code></strong></summary>
+<summary><strong>Real-mode (Encrypt + Ika devnet) — <code>OBSIDIAN_*_MODE=real</code></strong></summary>
 
-The upstream Encrypt and Ika TypeScript packages currently ship uncompiled `.ts` in their published `node_modules` exports. Node 24's native TS strip refuses to load uncompiled `.ts` from `node_modules`, so we keep the SDK in mock mode (the default). Set `OBSIDIAN_ENCRYPT_MODE=mock` and `OBSIDIAN_IKA_MODE=mock` (or omit them — that's the default). See gaps E5 / I0 in [`docs/gaps.md`](docs/gaps.md).
+Real mode is wired against pre-alpha gRPC on Solana devnet (gaps E5 / I0 closed):
+
+- Encrypt: dispatches via the upstream client to `pre-alpha-dev-1.encrypt.ika-network.net:443`. We `pnpm patch` the published 0.1.1 package's `exports` field + `dist/` import paths — see `patches/@encrypt.xyz__pre-alpha-solana-client@0.1.1.patch`.
+- Ika: vendored under `sdk/src/ika-vendor/` (the upstream package ships only `.ts` sources with no compiled `dist/`, so a patch alone wasn't enough). Targets `pre-alpha-dev-1.ika.ika-network.net:443`, secp256k1 / ECDSA params for Bitcoin signing.
+
+```bash
+OBSIDIAN_ENCRYPT_MODE=real OBSIDIAN_IKA_MODE=real \
+  OBSIDIAN_ENCRYPT_GRPC_URL=pre-alpha-dev-1.encrypt.ika-network.net:443 \
+  OBSIDIAN_ENCRYPT_PROGRAM_ID=4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8 \
+  OBSIDIAN_IKA_GRPC_URL=pre-alpha-dev-1.ika.ika-network.net:443 \
+  pnpm dev
+```
+
+Smoke test the live integration (4 green checks: encryptU64, encryptOrder, createDWallet, lockPolicy):
+
+```bash
+pnpm -F @obsidian-desk/sdk build
+node sdk/scripts/devnet-smoke.mjs
+```
+
+The `mock` mode (default) still exists for offline tests. **Note:** in real mode the SDK's gRPC modules are now opt-in via subpath imports — `import * as encrypt from '@obsidian-desk/sdk/encrypt'` and `import * as ika from '@obsidian-desk/sdk/ika'`. They are intentionally NOT re-exported from the barrel because Turbopack's import-graph walker would otherwise bundle `@grpc/grpc-js` into the client. The `btc` namespace stays on the barrel — bitcoinjs-lib is browser-safe.
+
+**One residual upstream blocker:** `try_match → execute_graph` CPI fails at depth 2 with a signer/writable demotion in `encrypt-anchor` 0.1.0's `invoke_execute_graph`. Tracked as **E2-residual** in [`docs/gaps.md`](docs/gaps.md). Closes when upstream ships a CPI variant that propagates the outer-tx signer flag to fresh output ciphertext accounts (or we vendor + adapt the helper). Everything up to and including the on-chain DSL graph and the 22-account instruction shape is in place — `tsx keeper/scripts/match-pair.ts <market> <a> <b>` reaches the CPI cleanly before stopping at the demotion.
 </details>
 
 > **Port scheme:** non-standard on purpose so the stack never collides with other local Docker projects. App `:13000`, keeper status `:13001`, Solana validator RPC `:18899`. Mapped consistently across `docker-compose.yml`, `Anchor.toml`, and the local-dev instructions above.
 
-## P-prompt progress
+## Build progress
 
-Driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md).
+Driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md), then closed-out gap work after P11.
 
-- [x] **P1** — Monorepo scaffold (`62d42c4`)
-- [x] **P2** — Anchor program with FHE-shaped accounts (`2f7c39a`)
-- [x] **P3** — Encrypt SDK + mock-mode ciphertexts (`427d1e5`)
-- [x] **P4** — Ika dWallet adapter + BTC tx builder + keeper + e2e settlement (`6d9ce5c`)
-- [x] **P5** — Next.js shell + obsidian design system (`fe50380`)
-- [x] **P6** — Landing wow hero: 3D cube + 6 sections (`99d62e3`)
-- [x] **P7** — Trade terminal + match/settle modal (`b13dca4`)
-- [x] **P8** — Deposit wizard polish: persisted state + esplora poll (`c990d30`)
-- [x] **P9** — E2E + keeper metrics + admin mode + seed-demo (`c6a34bd`)
-- [x] **P10** — Dockerization: app + keeper images, dev compose, prod overlay (`45c6cc5`)
-- [x] **P11** — Final README + DEVELOPMENT + DEPLOYMENT + LICENSE + CONTRIBUTING (this commit)
+- [x] **P1** — Monorepo scaffold
+- [x] **P2** — Anchor program with FHE-shaped accounts
+- [x] **P3** — Encrypt SDK + mock-mode ciphertexts
+- [x] **P4** — Ika dWallet adapter + BTC tx builder + keeper + e2e settlement
+- [x] **P5** — Next.js shell + obsidian design system
+- [x] **P6** — Landing wow hero: 3D cube + 6 sections
+- [x] **P7** — Trade terminal + match/settle modal
+- [x] **P8** — Deposit wizard polish: persisted state + esplora poll
+- [x] **P9** — E2E + keeper metrics + admin mode + seed-demo
+- [x] **P10** — Dockerization: app + keeper images, dev compose, prod overlay
+- [x] **P11** — Final README + DEVELOPMENT + DEPLOYMENT + LICENSE + CONTRIBUTING
+
+**Post-P11 — gap closures and real-mode integration**
+
+- [x] **E5** — Encrypt real-mode wired (`pnpm patch` on `@encrypt.xyz/pre-alpha-solana-client@0.1.1`)
+- [x] **I0** — Ika real-mode wired (vendored `sdk/src/ika-vendor/` from `@ika.xyz` 0.1.1 sources)
+- [x] **E1** — `EncryptedOrder` / `MatchIntent` now hold `[u8; 32]` ciphertext-account refs, not inline `Vec<u8>`
+- [x] **E2** — Anchor 1.0.2 / Rust 1.94 migration; `match_orders_graph` defined via `#[encrypt_fn]` DSL; on-chain CPI dispatch via `EncryptContext`
+- [x] **E3** — Settlement path split into `request_decryption` + `finalize_decryption` with on-chain digest verification
+- [x] **E4** — `MatchIntent` snapshots three independent ciphertext digests (one per fill output)
+- [x] **Devnet deploy** — `H25y…beLp` live on Solana devnet; `tsx keeper/scripts/devnet-bootstrap.ts` creates a market + two opposite-side orders backed by real Encrypt ciphertext accounts; `tsx keeper/scripts/match-pair.ts` exercises the full keeper matching loop
 
 ## Known gaps
 
@@ -354,11 +403,11 @@ Tracked in [`docs/gaps.md`](docs/gaps.md). High-impact items for reviewers:
 
 | ID | What | Impact | Workaround |
 |---|---|---|---|
-| **E0** | `CT_MAX = 3000` (not 4096) | Solana 10 240 B CPI realloc cap forced the smaller blob size | Accepted; real Encrypt uses keypair accounts (gap E1) |
-| **E1** | Ciphertexts are inline `Vec<u8>` on `EncryptedOrder` | Real Encrypt models CTs as 100 B keypair accounts owned by the Encrypt program | Refactor when vendor package compiles |
-| **E5 / I0** | Upstream Encrypt + Ika TS clients ship uncompiled `.ts` | Node 24 won't strip `.ts` from `node_modules` → real-mode unavailable | `mock` mode used everywhere; wrapper throws `VendorSDKUnavailableError` if you force `real` |
-| **I2** | Ika mock store is process-local | Keeper can't see frontend-minted dWallets out of the box | E2E tests inject the same SDK instance into the keeper; real Ika will use a persistent gRPC backend |
-| **I3** | `finalize_settlement` is permissionless | Anyone with a signed BTC tx hex can mark a match settled | Fix with SPV proof verification + keeper authority PDA in a follow-up |
+| **E0** | `CT_MAX = 3000` (not 4096) | Solana 10 240 B CPI realloc cap forced the smaller blob size | Accepted; only matters as long as ciphertexts were inline. Now that `EncryptedOrder` holds 32-byte CT refs, this is a leftover constant — kept around for the placeholder mock path. |
+| **E2-residual** | `execute_graph` CPI fails at depth 2 with a signer/writable demotion (`encrypt-anchor` 0.1.0's `invoke_execute_graph` hard-codes `is_signer=false` for `encrypt_execute_account`s) | Keeper's match-pair script reaches the CPI cleanly but stops there; no on-chain match settles end-to-end yet | Closes when upstream ships a CPI variant that propagates outer-tx signer flags, or we vendor + adapt the helper. Tracked in `docs/gaps.md`. |
+| **I1** | DKG shortcut still exists in `mock` mode (local secp256k1 keygen, not 2PC-MPC) | Mock mode is "single-key-with-correct-shape", not real DKG | Real mode (`OBSIDIAN_IKA_MODE=real`) hits the Ika gRPC for full DKG against `pre-alpha-dev-1.ika.ika-network.net:443`. |
+| **I2** | Mock dWallet store is process-local | Keeper can't see frontend-minted dWallets across separate processes in mock mode | Use `?admin=1` mode for cross-process demos; real-mode dWallets are network-resident on Ika and don't have this constraint. |
+| **I3** | `finalize_settlement` is permissionless | Anyone with a signed BTC tx hex can mark a match settled | Fix with SPV proof verification + keeper authority PDA in a follow-up. Adding only the keeper-keypair gate is performance theater without the proof check, so they ship together or not at all. |
 
 ## Contributing
 

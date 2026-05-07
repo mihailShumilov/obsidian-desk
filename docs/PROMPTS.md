@@ -1,6 +1,8 @@
 # ObsidianDesk — Build Prompts
 
-9 промптов. Каждый самодостаточен (не требует предыдущих). Вставляй в Claude Code / Cursor / Windsurf, предварительно положив рядом `ARCHITECTURE.md` и `UI_DESIGN.md` как context.
+> **Status:** This file is a **pre-build snapshot** of the scaffolding plan. The eleven prompts below were the source-of-truth at kickoff and most have shipped — but several toolchain / dependency choices in the prompt text are now stale (Anchor 0.31, Rust 1.93, `projectserum/build`, mock-only Encrypt + Ika). For the current code reality, treat **`README.md`** and **`docs/ARCHITECTURE.md`** as authoritative and use this file only when you're trying to understand the historical "what was the original spec" for a prompt P*N*. Toolchain pins live in `rust-toolchain.toml`, `package.json`, and CLAUDE.md.
+
+11 промптов. Каждый самодостаточен (не требует предыдущих). Вставляй в Claude Code / Cursor / Windsurf, предварительно положив рядом `ARCHITECTURE.md` и `UI_DESIGN.md` как context.
 
 **Правило использования:**
 - Перед каждым промптом убедись, что в рабочей директории есть актуальные `docs/vendor/ika-pre-alpha.md` и `docs/vendor/encrypt-pre-alpha.md` (скачанные с docs.ika.xyz и docs.encrypt.xyz).

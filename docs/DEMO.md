@@ -17,7 +17,7 @@ Do all of this **before** you hit record. Every item failing on camera costs a r
 
 ### 0.1 Environment
 
-- [ ] Mock mode on everywhere (`OBSIDIAN_ENCRYPT_MODE=mock`, `OBSIDIAN_IKA_MODE=mock` — default in `.env.example`). Real-mode SDKs ship uncompiled `.ts` in node_modules (gaps E5 / I0) — mock is the working path.
+- [ ] Pick a mode and stick to it for the take. **Mock** (`OBSIDIAN_ENCRYPT_MODE=mock`, `OBSIDIAN_IKA_MODE=mock` — default) is offline, deterministic, and the safest path on shoot day. **Real** mode hits the live Encrypt + Ika gRPC on devnet and will drift if the upstream services blip — fine for proof shots, risky for the full match/settle scene. If you record the match scene in mock and the dWallet creation in real, document that gap in your VO ("we recorded these scenes against the live devnet network"). Don't mix on the same scene cut.
 - [ ] Devnet is up and the program is deployed: `solana program show H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp --url devnet` prints a recent slot.
 - [ ] Local stack is running: `pnpm docker:up` (M-series Macs: launch `solana-test-validator` on the host first, then `pnpm docker:up`). Wait for both containers to reach **healthy** — `docker compose ps`.
 - [ ] Book is pre-seeded so `/trade` isn't empty on camera: `pnpm seed:demo` (market + 2 dWallets + 8 encrypted orders).
@@ -190,7 +190,9 @@ devnet: H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
 
 ## 2. What to say if / when someone asks "is this real?"
 
-The vendor SDKs for Encrypt and Ika are pre-alpha and currently ship uncompiled TypeScript that can't run in our Node 24 runtime — documented in `docs/gaps.md` as E5 and I0. Our implementation is **mock-mode behind the real API surface**: every call site that will talk to the vendor in production talks to a local adapter today that returns correctly-shaped data (ciphertext bytes, dWallet addresses, signed BTC transactions). The Solana program, the matching logic, and the settlement choreography are real — swapping the two `OBSIDIAN_*_MODE=mock` env vars to `real` is the Week 6 deliverable and does not require UI changes. Say this plainly if asked; don't oversell.
+The Encrypt + Ika integrations are wired against the real pre-alpha gRPC services on Solana devnet — flip `OBSIDIAN_ENCRYPT_MODE=real` and `OBSIDIAN_IKA_MODE=real` and the SDK dispatches `encryptOrder` to Encrypt's `createInput` and `createDWallet` to Ika's `requestDKG`. The smoke test at `node sdk/scripts/devnet-smoke.mjs` proves the live round-trip in four green checks. The Anchor program is deployed on devnet at `H25y…beLp` and includes the `#[encrypt_fn] match_orders_graph` DSL that dispatches to the real Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8`.
+
+The one residual blocker is **gap E2-residual** — `encrypt-anchor` 0.1.0's `invoke_execute_graph` helper demotes the outer-tx signer flag on output ciphertext accounts, which makes our 6-input/3-output matching graph fail at depth 2 of the CPI. The on-chain DSL, the program-side wiring, and the keeper's 22-account instruction are all in place; closure waits on upstream (or vendoring the helper). The mock-mode path is what carries the live match/settle scene in the video — say so plainly if asked; don't oversell. Show the smoke-test output as proof of the real-mode integration.
 
 ---
 

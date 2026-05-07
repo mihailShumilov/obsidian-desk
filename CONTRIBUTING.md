@@ -22,6 +22,16 @@ Prefix with the prompt id (`P1`–`P11`) when the change implements one of the s
 
 Avoid AI/Claude/Anthropic attribution lines (`Co-Authored-By: Claude` etc.) per project policy.
 
+## Toolchain pins
+
+Match these or the program/build will diverge:
+
+- Rust **1.94** stable (pinned in `rust-toolchain.toml`)
+- Anchor **1.0.2** — install via `cargo install anchor-cli@1.0.2 --locked`. Do **not** use `avm` (rate-limit'ed from CI; we removed the avm install path).
+- `programs/obsidian-core/Cargo.toml` is on `edition = "2021"` (not `"2024"` like upstream) because anchor-cli 1.0.2's manifest parser doesn't yet recognise `2024`.
+- Node.js 24 LTS, pnpm 9.15.4
+- The app must be on **React 19.1+** (see CLAUDE.md "Pinned versions" for the React 18 incompatibility with Next 16).
+
 ## Local CI checks
 
 Run these before pushing — they mirror what `.github/workflows/ci.yml` runs against your PR:
@@ -35,8 +45,12 @@ pnpm typecheck
 pnpm -F @obsidian-desk/app build
 
 # anchor + clippy
-cargo clippy --workspace --all-targets -- -D warnings
-anchor build
+cargo clippy --workspace -- -D warnings   # NB: no --all-targets — that pulls in
+                                          # the idl-build cfg which trips macro-
+                                          # generated lints we can't fix locally.
+anchor build --no-idl --ignore-keys       # --ignore-keys: program keypair file
+                                          # is gitignored; declare_id!() is the
+                                          # source of truth.
 ```
 
 For full anchor tests you'll need a local validator:
@@ -47,15 +61,24 @@ anchor deploy --provider.cluster http://127.0.0.1:18899
 anchor test --skip-local-validator
 ```
 
+For real-mode (Encrypt + Ika devnet) smoke:
+
+```bash
+pnpm -F @obsidian-desk/sdk build
+node sdk/scripts/devnet-smoke.mjs
+# expect 4 green checks; this hits live pre-alpha gRPC and is NOT in CI.
+```
+
 ## PR checklist
 
 Before opening a PR:
 
 - [ ] `pnpm typecheck` is green
 - [ ] `pnpm -F @obsidian-desk/app build` succeeds
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` is clean
-- [ ] If you touched `programs/`, `anchor test` passes (5 suites)
-- [ ] If you touched the SDK, `pnpm -F @obsidian-desk/sdk test` passes (26 cases)
+- [ ] `cargo clippy --workspace -- -D warnings` is clean
+- [ ] If you touched `programs/`, `anchor test` passes
+- [ ] If you touched the SDK, `pnpm -F @obsidian-desk/sdk test` passes
+- [ ] If you touched the SDK's encrypt or ika modules, `node sdk/scripts/devnet-smoke.mjs` is green (real-mode)
 - [ ] You did NOT introduce any backwards-compat shim, fallback, or dead-code path "just in case"
 - [ ] You did NOT mock data at boundaries that already work — match what the existing tests do
 - [ ] Commit message starts with a P-prompt id or a `fix/feat/docs/chore` scope

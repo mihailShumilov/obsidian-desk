@@ -2,18 +2,28 @@
 
 ## Authoritative docs (always consult before planning any work)
 - docs/ARCHITECTURE.md               — system design, components, data flow
+- docs/DEVELOPMENT.md                — daily-driver developer playbook
+- docs/DEPLOYMENT.md                 — deploy runbook (program, frontend, keeper, VPS+Cloudflare)
+- docs/DEMO.md                       — shoot script for the submission video
 - docs/UI_DESIGN.md                  — visual language, wow-moments, tokens
 - docs/INSTRUCTIONS.md               — 6-week roadmap, deliverables, acceptance per week
 - docs/PROMPTS.md                    — tuned scaffolding prompts P1..P11
+- docs/gaps.md                       — known SDK + program gaps with workarounds (closure status authoritative)
 - docs/vendor/ika-pre-alpha.md       — Ika Network SDK + dWallet reference
 - docs/vendor/encrypt-pre-alpha.md   — Encrypt SDK + FHE primitives reference
 
-Before generating ANY code, re-read the relevant prompt from docs/PROMPTS.md and the matching week in docs/INSTRUCTIONS.md. Do not invent APIs — use what's in docs/vendor/*.
+Before generating ANY code, re-read the relevant prompt from docs/PROMPTS.md and the matching week in docs/INSTRUCTIONS.md, then check docs/gaps.md for the current closure status of any vendor-SDK feature you're touching. Do not invent APIs — use what's in docs/vendor/*.
 
 ## Non-negotiables
 - Final hackathon submission must NOT be plaintext-only. FHE comparison (Encrypt) and native BTC settlement via dWallet (Ika) are required by Week 6.
 - Week 1 intentionally uses plaintext scaffolding to prove the data flow — that is expected and not a violation of the above.
 - Native BTC (no bridge), encrypted orderbook (no leakage), and dark-UI polish are the differentiators — never cut them.
+
+## Current state (post-P11 closures)
+- Real-mode Encrypt + Ika SDK is wired against pre-alpha gRPC on Solana devnet (gaps E5 + I0 closed). Smoke test: `node sdk/scripts/devnet-smoke.mjs`.
+- `EncryptedOrder` / `MatchIntent` hold 32-byte ciphertext-account refs (gap E1 closed); settlement is `request_decryption` → `finalize_decryption` with on-chain digest verification (E3 + E4 closed).
+- The `#[encrypt_fn] match_orders_graph` DSL dispatches to the deployed Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` on devnet; obsidian-core is at `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`.
+- One residual upstream blocker: **gap E2-residual** — `encrypt-anchor` 0.1.0's `invoke_execute_graph` demotes the outer-tx signer flag on output ciphertext accounts, which fails our 6-input/3-output graph at depth 2. On-chain DSL graph + 22-account instruction shape are complete; closure waits on upstream or vendoring the helper.
 
 ## Pinned versions
 - Node.js 24 LTS, pnpm 9+
