@@ -204,7 +204,7 @@ export async function pollOnce(
         .accountsPartial({
           matchRecord: publicKey,
           market: account.market,
-          keeper: program.provider.publicKey!,
+          keeperAuthority: program.provider.publicKey!,
         })
         .rpc({ commitment: 'confirmed' });
 
@@ -227,7 +227,7 @@ export async function pollOnce(
           .accountsPartial({
             matchRecord: publicKey,
             market: account.market,
-            keeper: program.provider.publicKey!,
+            keeperAuthority: program.provider.publicKey!,
           })
           .rpc({ commitment: 'confirmed' });
       } catch (inner) {

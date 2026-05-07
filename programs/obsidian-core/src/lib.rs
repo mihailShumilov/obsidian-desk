@@ -31,6 +31,7 @@ pub mod obsidian_core {
         ctx: Context<InitializeMarket>,
         base_mint: Pubkey,
         quote_mint: Pubkey,
+        keeper_authority: Pubkey,
     ) -> Result<()> {
         let market = &mut ctx.accounts.market;
         market.admin = ctx.accounts.admin.key();
@@ -39,6 +40,7 @@ pub mod obsidian_core {
         market.orderbook_head = None;
         market.settle_vault = ctx.accounts.settle_vault.key();
         market.ika_policy = ctx.accounts.ika_policy.key();
+        market.keeper_authority = keeper_authority;
         market.match_count = 0;
         market.active_order_count = 0;
         market.bump = ctx.bumps.market;
@@ -369,12 +371,13 @@ pub struct SettlementOutcome<'info> {
         constraint = match_record.match_id == match_id @ ErrorCode::InvalidMatchId,
     )]
     pub match_record: Account<'info, MatchRecord>,
-    /// CHECK: scoped via has_one on match_record above.
-    pub market: UncheckedAccount<'info>,
-    /// Anyone can finalize — settlement is permissionless. Production keeper
-    /// would use a dedicated keeper keypair; for the scaffold any signer is
-    /// accepted (gap I3 in docs/gaps.md).
-    pub keeper: Signer<'info>,
+    /// Settlement is gated to `market.keeper_authority` set at init —
+    /// closes the SEC-H-1 finding where any signer could submit forged
+    /// btc_tx_proof bytes or DoS via fail_settlement. SPV proof
+    /// verification is still pending (gap I3).
+    #[account(has_one = keeper_authority)]
+    pub market: Account<'info, MarketState>,
+    pub keeper_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]

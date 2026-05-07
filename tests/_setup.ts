@@ -51,22 +51,26 @@ export interface FreshMarket {
 /**
  * Generate fresh mint/vault/policy pubkeys, derive the market PDA, and
  * call `initializeMarket`. Returns the resolved accounts so the suite can
- * thread them into subsequent instructions.
+ * thread them into subsequent instructions. The `keeper_authority` is set
+ * to the same `admin` pubkey by default so tests can drive settlement
+ * with the same provider that initialized the market.
  */
 export async function bootstrapFreshMarket(
   program: Program<ObsidianCore>,
   admin: PublicKey,
+  options: { keeperAuthority?: PublicKey } = {},
 ): Promise<FreshMarket> {
   const baseMint = Keypair.generate().publicKey;
   const quoteMint = Keypair.generate().publicKey;
   const settleVault = Keypair.generate().publicKey;
   const ikaPolicy = Keypair.generate().publicKey;
+  const keeperAuthority = options.keeperAuthority ?? admin;
   const [market, marketBump] = PublicKey.findProgramAddressSync(
     [Buffer.from('market'), baseMint.toBuffer(), quoteMint.toBuffer()],
     program.programId,
   );
   await program.methods
-    .initializeMarket(baseMint, quoteMint)
+    .initializeMarket(baseMint, quoteMint, keeperAuthority)
     .accountsPartial({
       market,
       settleVault,

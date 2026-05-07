@@ -56,6 +56,10 @@ pub struct MarketState {
     pub orderbook_head: Option<Pubkey>,
     pub settle_vault: Pubkey,
     pub ika_policy: Pubkey,
+    /// The only signer permitted to call `finalize_settlement` /
+    /// `fail_settlement`. Set at init by the admin; rotation requires
+    /// admin to redeploy the market (no in-place setter).
+    pub keeper_authority: Pubkey,
     /// Monotonic — incremented once per `try_match`. Also used as match-id source.
     pub match_count: u64,
     /// Best-effort count; incremented on submit, decremented on cancel / match.

@@ -54,7 +54,7 @@ describe('obsidian-core', () => {
 
   it('initializes a BTC/USDC market', async () => {
     await program.methods
-      .initializeMarket(baseMint, quoteMint)
+      .initializeMarket(baseMint, quoteMint, provider.wallet.publicKey)
       .accountsPartial({
         market,
         settleVault,
@@ -67,6 +67,9 @@ describe('obsidian-core', () => {
     expect(state.admin.toBase58()).to.eq(provider.wallet.publicKey.toBase58());
     expect(state.baseMint.toBase58()).to.eq(baseMint.toBase58());
     expect(state.quoteMint.toBase58()).to.eq(quoteMint.toBase58());
+    expect(state.keeperAuthority.toBase58()).to.eq(
+      provider.wallet.publicKey.toBase58(),
+    );
     expect(state.matchCount.toNumber()).to.eq(0);
     expect(state.activeOrderCount).to.eq(0);
     expect(state.bump).to.eq(marketBump);

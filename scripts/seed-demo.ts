@@ -118,7 +118,13 @@ async function main(): Promise<void> {
 
   if (!marketExisted) {
     const methods = program.methods as LooseProgramMethods;
-    const sig = await methods['initializeMarket']!(baseMint, quoteMint)
+    // The wallet running the seed is also the keeper for the demo, so it
+    // can drive try_match / request_settlement and finalize directly.
+    const sig = await methods['initializeMarket']!(
+      baseMint,
+      quoteMint,
+      wallet.publicKey,
+    )
       .accountsPartial({
         market,
         settleVault,
