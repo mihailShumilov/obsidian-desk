@@ -174,9 +174,18 @@ pub struct MatchRecord {
     pub created_at: i64,
     pub bump: u8,
     /// Set by `finalize_settlement` once the keeper has broadcast and
-    /// confirmed the BTC tx. Empty until then.
+    /// confirmed the BTC tx. Encoding:
+    ///   - 32 bytes: txid-only (SPV proof not yet attached; spv_verified == false).
+    ///   - >32 bytes: `txid (32B) || spv_blob (header || varint || merkle_path)`.
+    ///     `spv_verified == true` once the on-chain verifier accepted the blob.
+    /// Empty until finalize_settlement runs.
     #[max_len(BTC_TX_PROOF_MAX)]
     pub btc_tx_proof: Vec<u8>,
     /// 0 until `finalize_settlement` runs.
     pub finalized_at: i64,
+    /// True when `btc_tx_proof` carries a merkle-inclusion proof that the
+    /// on-chain SPV verifier accepted at finalize-settlement time. False
+    /// when the keeper submitted txid-only (legacy / mock mode). Closes
+    /// gap I3 (proof verification) — auditors can filter on this flag.
+    pub spv_verified: bool,
 }

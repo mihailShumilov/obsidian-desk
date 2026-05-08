@@ -181,8 +181,10 @@ describe.skip('e2e: settlement (encrypt + match + Ika sign + finalize)', () => {
     expect(finalRec.settleStatus).to.deep.eq({ settled: {} });
     // Proof is the 32-byte broadcast txid (real signet txid in real mode,
     // sha-256 of the signed hex in mock/fallback mode). UI renders it as
-    // mempool.space/<network>/tx/<hex>.
+    // mempool.space/<network>/tx/<hex>. SPV merkle proof not attached in
+    // mock mode (no real block to fetch /merkle-proof from).
     expect(finalRec.btcTxProof.length).to.eq(32, 'proof = 32-byte txid');
+    expect(finalRec.spvVerified).to.eq(false, 'mock-mode txid-only proof is unverified');
     expect(finalRec.finalizedAt.gt(new BN(0))).to.eq(true);
     expect(Buffer.from(finalRec.btcTxProof).toString('hex')).to.match(/^[0-9a-f]{64}$/);
 

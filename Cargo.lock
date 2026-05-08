@@ -670,6 +670,7 @@ dependencies = [
  "encrypt-anchor",
  "encrypt-solana-dsl",
  "encrypt-types",
+ "solana-sha256-hasher",
 ]
 
 [[package]]

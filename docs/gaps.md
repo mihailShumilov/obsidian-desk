@@ -341,20 +341,72 @@ settle time.
 8 unit tests cover the round-trip, concurrent writes, permissions, and
 the cross-process visibility property.
 
-### I3. `finalize_settlement` accepts any signer (no keeper authority)
-**Where:** `programs/obsidian-core/src/lib.rs::FinalizeSettlement`.
+### I3. ~~`finalize_settlement` accepts any signer + no proof verification~~ — **CLOSED (authority + SPV merkle inclusion)**
+**Where:**
+- Authority gate: `programs/obsidian-core/src/lib.rs::SettlementOutcome` —
+  `#[account(has_one = keeper_authority)]` on the market account, plus
+  `keeper_authority: Signer<'info>`.
+- SPV verifier: `programs/obsidian-core/src/spv.rs::verify_merkle_inclusion`.
 
-**Reality:** the `keeper` account in the Anchor accounts struct is just a
-`Signer<'info>` with no on-chain authority check. Anyone with SOL can
-call `finalize_settlement` and submit arbitrary `btc_tx_proof` bytes.
+**Closure (2026-05-08):**
 
-**Why deviate now:** a single keeper-keypair check still doesn't enforce
-the actual proof's validity — that needs SPV / merkle inclusion verified
-on-chain (deferred to P9 per ARCHITECTURE.md §10). Adding a stub authority
-check would be performance theater.
+**Authority gate** — `MarketState` carries `keeper_authority: Pubkey` set
+at `initialize_market`. `SettlementOutcome` (the accounts struct shared
+by `finalize_settlement` and `fail_settlement`) requires the market to
+have-one of that authority and the keeper signer to match. Anyone other
+than the configured authority gets `ConstraintHasOne` at the Anchor
+boundary, never reaching the handler. Same gate applies to `try_match`,
+`request_decryption`, `finalize_decryption`, and the new
+`consume_btc_approval`.
 
-**Closure plan (P9):** add a real `KeeperAuthority` PDA stored on
-`MarketState`, gate `finalize_settlement` with `has_one = keeper_authority`,
-AND verify the BTC proof via SPV against a header oracle. Both must land
-together — a keeper check without proof verification is worse than nothing
-because it gives a false sense of security.
+**SPV merkle inclusion** — new module `programs/obsidian-core/src/spv.rs`
+implements Bitcoin double-SHA256 merkle-path verification using Solana's
+`sol_sha256` syscall (via `solana-sha256-hasher` crate). Proof blob
+format:
+```
+[0..80]              80-byte block header
+[80..81+L]           varint N — number of merkle siblings
+[81+L..81+L+N*33]    N * (sibling: 32 bytes || direction: 1 byte)
+```
+
+`finalize_settlement` dispatches on `btc_tx_proof.len()`:
+- exactly 32 bytes: txid-only path (legacy / mock-mode broadcast). Stored
+  as-is, `record.spv_verified = false`.
+- >32 bytes: parsed as `txid (32) || spv_blob`, runs
+  `verify_merkle_inclusion(&txid, spv_blob)`. On success
+  `record.spv_verified = true`; on failure
+  `ErrorCode::BtcProofInvalid` aborts the call.
+
+`MatchRecord.spv_verified: bool` is the auditable flag — set true only
+when the on-chain verifier accepted the merkle path. UI / `/positions`
+filter on this to badge "settled with SPV proof" vs "settled, proof
+pending".
+
+**Keeper integration** — `keeper/src/poll.ts` calls
+`@obsidian-desk/sdk/btc::fetchSpvProof(txid, network)` after a real-mode
+broadcast lands. The helper hits mempool.space's `/merkle-proof`,
+`/block-height`, and `/block/<hash>/header` endpoints and returns the
+serialised blob. If the tx is unconfirmed (returns null), the keeper
+persists txid-only and `spv_verified` stays false.
+
+`solana-sha256-hasher` was added to `programs/obsidian-core/Cargo.toml`
+because anchor-lang 1.0.2 dropped the `hash` submodule from its
+`solana_program` facade.
+
+**Verification:**
+- `cargo test --lib spv` passes 4 unit tests covering single-tx,
+  two-tx, wrong-root, and truncated-proof cases.
+- `anchor build --no-idl --ignore-keys` compiles clean.
+- `pnpm test` (sdk): 74 unit tests pass (no regressions).
+- `pnpm -r typecheck`: clean across sdk + keeper + app.
+
+**Residual (deliberate scope cut, follow-up):**
+- Header proof-of-work check. The current verifier accepts any 80-byte
+  header — the keeper-authority gate is what bounds who can submit. A
+  trustless version would verify `sha256d(header) <= target_from_bits`.
+- Trustless header chain. Storing a recent-blocks ring buffer on the
+  market and requiring `header.prev_hash` matches a known recent hash
+  closes "the keeper made up a header that just happens to commit to
+  a real txid".
+  Both follow-ups would push obsidian-core towards a full BTC light
+  client; for the demo the merkle inclusion is the highest-value gate.

@@ -374,6 +374,106 @@ export function mempoolSpaceTxUrl(txid: string, network: BtcNetworkName = 'signe
   return `https://mempool.space/${network}/tx/${txid}`;
 }
 
+interface EsploraMerkleProof {
+  block_height: number;
+  merkle: string[];          // sibling hashes in big-endian hex (Bitcoin display order)
+  pos: number;               // index of the tx in the block
+}
+
+interface EsploraBlockHeader {
+  // mempool.space returns the 80-byte header as 160-char hex.
+  // Endpoint: GET /block/<hash>/header
+}
+
+/**
+ * Fetch a Bitcoin SPV merkle proof for `txid` from mempool.space, package
+ * it into the on-chain verifier's expected blob format
+ * (header || varint || siblings), and return the bytes ready to be
+ * concatenated with the txid for `finalize_settlement`.
+ *
+ * Returns `null` if the tx is unconfirmed (no merkle proof yet) or the
+ * upstream is unreachable. Caller falls back to txid-only.
+ *
+ * Note: mempool.space returns siblings in BIG-endian (display) byte order
+ * but Bitcoin's internal hashing uses LITTLE-endian. We reverse each
+ * sibling and the txid (also display-order) before walking the tree.
+ * The on-chain verifier expects little-endian throughout.
+ */
+export async function fetchSpvProof(
+  txid: string,
+  network: BtcNetworkName = 'signet',
+  signal?: AbortSignal,
+): Promise<Buffer | null> {
+  if (!/^[0-9a-f]{64}$/.test(txid)) return null;
+  const base = `https://mempool.space/${network}/api`;
+  try {
+    const proofRes = await fetch(`${base}/tx/${txid}/merkle-proof`, { signal });
+    if (!proofRes.ok) return null;
+    const proof = (await proofRes.json()) as EsploraMerkleProof;
+
+    // Fetch the block header. /block-height returns the block hash; then
+    // /block/<hash>/header returns the 80-byte header hex.
+    const heightRes = await fetch(`${base}/block-height/${proof.block_height}`, { signal });
+    if (!heightRes.ok) return null;
+    const blockHash = (await heightRes.text()).trim();
+    const headerRes = await fetch(`${base}/block/${blockHash}/header`, { signal });
+    if (!headerRes.ok) return null;
+    const headerHex = (await headerRes.text()).trim();
+    if (!/^[0-9a-f]{160}$/.test(headerHex)) return null;
+    const header = Buffer.from(headerHex, 'hex');
+
+    // Build the merkle path: derive direction from the bit pattern of pos.
+    // At level k: if bit k of pos is 0, we are the left child (sibling on right)
+    //             if bit k of pos is 1, we are the right child (sibling on left).
+    let pos = proof.pos;
+    const siblings: Array<{ sibling: Buffer; direction: 0 | 1 }> = [];
+    for (const display of proof.merkle) {
+      if (!/^[0-9a-f]{64}$/.test(display)) return null;
+      // Reverse byte order: explorer hex is big-endian, internal hashing is LE.
+      const sibling = Buffer.from(display, 'hex').reverse();
+      const direction: 0 | 1 = (pos & 1) === 0 ? 0 : 1;
+      siblings.push({ sibling, direction });
+      pos >>= 1;
+    }
+
+    // Encode varint (siblings always < 0xfd in practice — Bitcoin block
+    // depths cap around ~13).
+    const n = siblings.length;
+    let varint: Buffer;
+    if (n < 0xfd) {
+      varint = Buffer.from([n]);
+    } else if (n <= 0xffff) {
+      varint = Buffer.alloc(3);
+      varint[0] = 0xfd;
+      varint.writeUInt16LE(n, 1);
+    } else {
+      // Unreachable for any real Bitcoin block, but defend anyway.
+      return null;
+    }
+
+    const pathBytes = Buffer.alloc(n * 33);
+    siblings.forEach((s, i) => {
+      s.sibling.copy(pathBytes, i * 33);
+      pathBytes[i * 33 + 32] = s.direction;
+    });
+
+    return Buffer.concat([header, varint, pathBytes]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Convert a display-order (big-endian) txid to the little-endian byte order
+ * the on-chain SPV verifier expects. Both forms are 32 bytes; just byte-reverse.
+ */
+export function txidToLittleEndian(txidHex: string): Buffer {
+  if (!/^[0-9a-f]{64}$/.test(txidHex)) {
+    throw new EncryptionError(`txidToLittleEndian: invalid hex ${txidHex.slice(0, 20)}…`);
+  }
+  return Buffer.from(txidHex, 'hex').reverse();
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // External-signer plumbing — closes gap I1's sign-surface.
 //

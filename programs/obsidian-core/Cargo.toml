@@ -25,6 +25,10 @@ custom-panic = []
 
 [dependencies]
 anchor-lang = "1.0.2"
+# Solana sha256 syscall — used for Bitcoin SPV merkle inclusion verification
+# in src/spv.rs. The `sha2` feature is required for off-chain compilation
+# (cargo test); on-chain BPF builds use the syscall directly.
+solana-sha256-hasher = { version = "3.1", default-features = false, features = ["sha2"] }
 
 # Encrypt-pre-alpha integration: real FHE matching via execute_graph CPI.
 # Pinned to upstream commit dadfff8 (2026-05-07). Closes gap E2.

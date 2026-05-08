@@ -269,7 +269,33 @@ export async function pollOnce(
       // Proof = the 32-byte txid. UI renders mempool.space/<net>/tx/<hex>.
       // In real mode this is the real signet txid; in mock/fallback it's a
       // sha-256 of the signed hex — UI may 404 if it tries to resolve.
-      const proofBytes = Buffer.from(broadcast.value, 'hex');
+      let proofBytes = Buffer.from(broadcast.value, 'hex');
+
+      // Gap I3 — try to attach an SPV merkle-inclusion proof when the
+      // broadcast was real and the tx has been confirmed. mempool.space's
+      // /merkle-proof endpoint returns null until the next block lands
+      // (signet ~10 min); on a fresh broadcast this path will skip and
+      // the keeper persists txid-only (spv_verified stays false on-chain).
+      if (broadcast.mode === 'real-ok') {
+        try {
+          const sdk = await import('@obsidian-desk/sdk/btc');
+          const spvBlob = await sdk.fetchSpvProof(broadcast.value, btcNetwork);
+          if (spvBlob) {
+            // On-chain verifier expects little-endian txid + spv blob.
+            const txidLE = sdk.txidToLittleEndian(broadcast.value);
+            proofBytes = Buffer.concat([txidLE, spvBlob]);
+            console.log(
+              `[keeper ${keeperId}] match ${matchIdStr} attached SPV proof ` +
+                `(${proofBytes.length} bytes total)`,
+            );
+          }
+        } catch (e) {
+          console.warn(
+            `[keeper ${keeperId}] SPV proof fetch failed for ${broadcast.value.slice(0, 12)}…: ` +
+              (e instanceof Error ? e.message : String(e)),
+          );
+        }
+      }
       const methods = program.methods as LooseProgramMethods;
       await methods['finalizeSettlement']!(new BN(matchIdStr), proofBytes)
         .accountsPartial({

@@ -202,8 +202,10 @@ describe.skip('e2e:full — Alice + Bob → two matches → one keeper pass sett
     for (const mr of matchRecords) {
       const rec = await program.account.matchRecord.fetch(mr);
       expect(rec.settleStatus).to.deep.eq({ settled: {} });
-      // Proof = 32-byte signet broadcast txid.
+      // Proof = 32-byte signet broadcast txid; SPV merkle proof is opt-in
+      // and only fetched when the broadcast was real-ok.
       expect(rec.btcTxProof.length).to.eq(32, 'proof = 32-byte txid');
+      expect(rec.spvVerified).to.eq(false, 'mock-mode txid-only proof is unverified');
       expect(rec.finalizedAt.gt(new BN(0))).to.eq(true);
       const proofHex = Buffer.from(rec.btcTxProof).toString('hex');
       expect(proofHex).to.match(/^[0-9a-f]{64}$/);

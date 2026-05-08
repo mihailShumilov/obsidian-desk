@@ -43,6 +43,7 @@ use encrypt_dsl::prelude::*;
 pub mod encrypt_cpi;
 pub mod errors;
 pub mod events;
+pub mod spv;
 pub mod state;
 
 use errors::ErrorCode;
@@ -512,6 +513,10 @@ pub mod obsidian_core {
             btc_tx_proof.len() <= state::BTC_TX_PROOF_MAX,
             ErrorCode::BtcProofTooLarge,
         );
+        require!(
+            btc_tx_proof.len() >= 32,
+            ErrorCode::BtcProofInvalid,
+        );
         let record = &mut ctx.accounts.match_record;
         require!(
             record.settle_status == SettleStatus::Pending,
@@ -519,9 +524,25 @@ pub mod obsidian_core {
         );
         let clock = Clock::get()?;
         let proof_len = btc_tx_proof.len() as u32;
+
+        // Two encoding modes (gap I3):
+        //  - exactly 32 bytes: txid-only (SPV not provided yet — keeper may
+        //                      revisit later; spv_verified stays false).
+        //  - >32 bytes: txid (32) || SPV proof blob → verify on-chain.
+        let mut spv_verified = false;
+        if btc_tx_proof.len() > 32 {
+            let txid: [u8; 32] = btc_tx_proof[..32]
+                .try_into()
+                .map_err(|_| ErrorCode::BtcProofInvalid)?;
+            let spv_blob = &btc_tx_proof[32..];
+            spv::verify_merkle_inclusion(&txid, spv_blob)?;
+            spv_verified = true;
+        }
+
         record.btc_tx_proof = btc_tx_proof;
         record.finalized_at = clock.unix_timestamp;
         record.settle_status = SettleStatus::Settled;
+        record.spv_verified = spv_verified;
 
         emit!(SettleFinalized {
             market: record.market,
