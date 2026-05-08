@@ -31,12 +31,57 @@ gRPC `createInput` and returns 3 fresh on-chain ciphertext-account
 identifiers; `submit_order` accepts those refs directly. `MatchIntent` also
 holds the 3 keeper-supplied output ct refs from `try_match`.
 
-### E2-residual. execute_graph CPI fails at runtime for 6-input/3-output graphs — **UPSTREAM BLOCKER**
+### E2-residual. ~~execute_graph CPI fails at runtime for 6-input/3-output graphs~~ — **CLOSED (vendored patch)**
 
-**Where:** `keeper/src/matching.ts::runMatchCycle` — the on-chain
-`try_match` instruction reaches Encrypt's `execute_graph` CPI but it
-fails at depth 2 with `Cross-program invocation with unauthorized signer
-or writable account`.
+**Where:** `crates/encrypt-anchor-vendor/src/lib.rs::account_meta_for`.
+
+**Closure (2026-05-08):** Vendored `encrypt-anchor` v0.1.0 from upstream
+`dwallet-labs/encrypt-pre-alpha@dadfff8c` into `crates/encrypt-anchor-vendor/`.
+Patched `invoke_execute_graph`, `execute_graph`, and `execute_registered_graph`
+to use a new helper `account_meta_for(acct)` that preserves both `is_signer`
+and `is_writable` from the outer-tx `AccountInfo`, instead of hardcoding
+`AccountMeta::new(_, false)` for every encrypt_execute_account.
+
+```rust
+fn account_meta_for(acct: &AccountInfo) -> AccountMeta {
+    if acct.is_writable {
+        AccountMeta::new(acct.key(), acct.is_signer)
+    } else {
+        AccountMeta::new_readonly(acct.key(), acct.is_signer)
+    }
+}
+```
+
+`programs/obsidian-core/Cargo.toml` repointed `encrypt-anchor` from the git
+dep to `path = "../../crates/encrypt-anchor-vendor"`. `Cargo.toml` workspace
+includes the new crate. `anchor build` compiles clean.
+
+The original problem from the upstream: the bug was hard-coded for the
+voting example which never had output cts that needed to be signers — all
+output cts in the upstream example overlapped with input cts and existed
+before the call. Our 6-input/3-output `match_orders_graph` has 3 fresh
+output cts whose inner system_program create-account CPI requires the
+signer flag to chain from the outer transaction.
+
+**Re-vendor procedure** (when upstream ships a fix or we bump the rev):
+1. `cd ~/.cargo/git/checkouts/encrypt-pre-alpha-* && git fetch origin && git checkout <new-rev>`
+2. `cp ~/.cargo/git/checkouts/.../chains/solana/program-sdk/anchor/src/*.rs crates/encrypt-anchor-vendor/src/`
+3. Re-apply the diff: search for `AccountMeta::new(acct.key(), false)` → replace with `account_meta_for(acct)`. Three call sites.
+4. Bump `encrypt-types` and `encrypt-solana-types` revs in
+   `crates/encrypt-anchor-vendor/Cargo.toml` and
+   `programs/obsidian-core/Cargo.toml` to match.
+5. `anchor build && anchor deploy --provider.cluster devnet`.
+
+**Devnet verification (final-deploy step):**
+```bash
+anchor deploy --provider.cluster devnet --program-name obsidian_core --program-keypair scripts/.obsidian-keypair.json
+tsx keeper/scripts/devnet-bootstrap.ts             # creates market + 2 pending orders
+tsx keeper/scripts/match-pair.ts <market> <a> <b>  # confirms the on-chain match graph completes
+```
+
+The previous reproducer (CPI fails at depth 2 with `Cross-program invocation
+with unauthorized signer or writable account`) is the failure mode that now
+goes away.
 
 **State (2026-05-07, devnet smoke):**
 - obsidian-core `1.0.2` deployed to Solana devnet at

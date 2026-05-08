@@ -31,7 +31,10 @@ anchor-lang = "1.0.2"
 # `encrypt-dsl` is the package alias the upstream proc-macro emits — match
 # their voting/anchor example's Cargo.toml.
 encrypt-types = { git = "https://github.com/dwallet-labs/encrypt-pre-alpha", rev = "dadfff8cfa82c7a5d4c463d7f967177462124552", default-features = false }
-encrypt-anchor = { git = "https://github.com/dwallet-labs/encrypt-pre-alpha", rev = "dadfff8cfa82c7a5d4c463d7f967177462124552" }
+# encrypt-anchor is VENDORED locally — closes gap E2-residual. The upstream
+# at the same rev demotes outer-tx signer flags on output ciphertext accounts,
+# breaking our 6-input/3-output match graph CPI. See crates/encrypt-anchor-vendor.
+encrypt-anchor = { path = "../../crates/encrypt-anchor-vendor" }
 encrypt-dsl = { package = "encrypt-solana-dsl", git = "https://github.com/dwallet-labs/encrypt-pre-alpha", rev = "dadfff8cfa82c7a5d4c463d7f967177462124552" }
 
 [lints.rust]

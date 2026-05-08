@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "programs/*",
+    "crates/encrypt-anchor-vendor",
 ]
 
 [profile.release]

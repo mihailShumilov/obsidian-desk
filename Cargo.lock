@@ -450,7 +450,6 @@ dependencies = [
 [[package]]
 name = "encrypt-anchor"
 version = "0.1.0"
-source = "git+https://github.com/dwallet-labs/encrypt-pre-alpha?rev=dadfff8cfa82c7a5d4c463d7f967177462124552#dadfff8cfa82c7a5d4c463d7f967177462124552"
 dependencies = [
  "anchor-lang",
  "encrypt-solana-types",

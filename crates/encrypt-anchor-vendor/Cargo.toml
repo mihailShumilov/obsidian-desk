@@ -1,0 +1,38 @@
+# Local vendor of encrypt-anchor — closes gap E2-residual.
+#
+# The upstream `encrypt-anchor` crate at
+# https://github.com/dwallet-labs/encrypt-pre-alpha (rev dadfff8c) hardcodes
+# `AccountMeta::new(acct.key(), false)` for every encrypt_execute_account in
+# `invoke_execute_graph`, demoting outer-tx signer flags. This breaks our
+# 6-input/3-output match_orders_graph at depth 2 of the CPI.
+#
+# The patch in src/lib.rs preserves both `is_signer` and `is_writable` from
+# the outer-tx AccountInfo, which is what ALL of `invoke_execute_graph`,
+# `execute_graph`, and `execute_registered_graph` need to do for graphs whose
+# outputs are fresh keypair accounts (signers in the outer tx, must remain
+# signers at the inner CPI for system_program create-account to succeed).
+#
+# Re-vendor when upstream ships a fix:
+#   1. git -C ~/.cargo/git/checkouts/encrypt-pre-alpha-* fetch origin
+#   2. cp ../path/to/upstream/chains/solana/program-sdk/anchor/src/*.rs src/
+#   3. re-apply the patch in `invoke_execute_graph` (and friends) — diff
+#      against this directory's prior content to spot regressions.
+
+[package]
+name = "encrypt-anchor"
+version = "0.1.0"
+authors = ["dWallet Labs, Ltd. <dev@dwalletlabs.com>", "ObsidianDesk (vendored)"]
+license = "BSD-3-Clause-Clear"
+publish = false
+edition = "2021"
+
+[dependencies]
+# Pull encrypt-types and encrypt-solana-types from the same upstream rev as
+# obsidian-core's deps. The rev is pinned in programs/obsidian-core/Cargo.toml
+# — keep them aligned to avoid type-version skew at the CPI boundary.
+encrypt-types = { git = "https://github.com/dwallet-labs/encrypt-pre-alpha", rev = "dadfff8cfa82c7a5d4c463d7f967177462124552", default-features = false, package = "encrypt-types" }
+encrypt-solana-types = { git = "https://github.com/dwallet-labs/encrypt-pre-alpha", rev = "dadfff8cfa82c7a5d4c463d7f967177462124552", package = "encrypt-solana-types" }
+anchor-lang = "1.0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
