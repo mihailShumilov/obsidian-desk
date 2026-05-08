@@ -12,13 +12,14 @@ import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { AnchorProvider, Program, type Idl } from '@coral-xyz/anchor';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
 
-// Local mempool URL helper — keeps this server action tree-shake-free of
-// `@obsidian-desk/sdk/btc`, which pulls bitcoinjs-lib + tiny-secp256k1's
-// WASM. The Next.js standalone build doesn't include native-module WASM
-// assets by default, so importing the BTC sdk subpath crashed /positions
-// at request time with ENOENT on secp256k1.wasm.
+// We don't import from `@obsidian-desk/sdk` here — the barrel re-exports
+// `btc` which pulls bitcoinjs-lib + tiny-secp256k1's WASM, and Next.js's
+// standalone runtime image doesn't bundle WASM assets, so requiring the
+// SDK barrel from a server action crashes the /positions request with
+// ENOENT on secp256k1.wasm. Inline the program-id constant + the
+// mempool-URL helper instead.
+const DEFAULT_OBSIDIAN_PROGRAM_ID = 'H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp';
 function mempoolSpaceTxUrl(txid: string, network: 'signet' | 'testnet'): string {
   return `https://mempool.space/${network}/tx/${txid}`;
 }
