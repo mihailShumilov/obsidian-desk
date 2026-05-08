@@ -79,6 +79,12 @@ impl<'info> EncryptCpi for EncryptContext<'info> {
             AccountMeta::new(self.payer.key(), true),
             AccountMeta::new_readonly(self.event_authority.key(), false),
             AccountMeta::new_readonly(self.encrypt_program.key(), false),
+            // vendored: system_program included so Encrypt's inner
+            // system_program::create_account CPI for fresh-keypair output cts
+            // (CREATE mode) can resolve. Upstream omits this — the voting
+            // example only used UPDATE mode (pre-allocated outputs) so the
+            // bug never surfaced in their tests. See gap E2-residual.
+            AccountMeta::new_readonly(self.system_program.key(), false),
         ];
         for acct in encrypt_execute_accounts {
             // vendored: was AccountMeta::new(acct.key(), false). Preserves
@@ -97,6 +103,7 @@ impl<'info> EncryptCpi for EncryptContext<'info> {
             self.config.clone(), self.deposit.clone(), self.caller_program.clone(),
             self.cpi_authority.clone(), self.network_encryption_key.clone(), self.payer.clone(),
             self.event_authority.clone(), self.encrypt_program.clone(),
+            self.system_program.clone(),
         ];
         account_infos.extend_from_slice(encrypt_execute_accounts);
 

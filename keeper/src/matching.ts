@@ -129,21 +129,21 @@ export async function runMatchCycle(
     payer.publicKey,
   );
 
-  // The encrypt-anchor v0.1.0 execute_graph CPI expects output ct accounts
-  // to PRE-EXIST (UPDATE mode) — it doesn't create new keypair accounts
-  // mid-CPI. We pre-create the three outputs via gRPC `createInput` with
-  // zero placeholder plaintexts; execute_graph will overwrite them with
-  // the real comparator results.
+  // CREATE mode (gap E2-residual closure): output ct accounts are FRESH
+  // keypairs that the execute_graph CPI's inner system_program::create_account
+  // allocates. Each keypair signs the outer tx so the inner CPI's signer
+  // requirement is satisfied via signer-flag inheritance (the vendor-patched
+  // encrypt-anchor at crates/encrypt-anchor-vendor/ propagates the outer-tx
+  // is_signer flag through invoke_execute_graph's account_metas).
+  const canMatchKeypair = Keypair.generate();
+  const fillSizeKeypair = Keypair.generate();
+  const clearingPriceKeypair = Keypair.generate();
+  const canMatchPubkey = canMatchKeypair.publicKey;
+  const fillSizePubkey = fillSizeKeypair.publicKey;
+  const clearingPricePubkey = clearingPriceKeypair.publicKey;
   console.log(
-    `[keeper ${options.keeperId}] pre-allocating 3 output ct accounts via gRPC…`,
+    `[keeper ${options.keeperId}] CREATE-mode output cts (fresh keypair signers)`,
   );
-  // EBool placeholder (false), then two EUint64 zeros.
-  const canMatchInitId = await encryptSdk.encryptSide('bid');
-  const fillSizeInitId = await encryptSdk.encryptU64(0n);
-  const clearingInitId = await encryptSdk.encryptU64(0n);
-  const canMatchPubkey = new PublicKey(canMatchInitId);
-  const fillSizePubkey = new PublicKey(fillSizeInitId);
-  const clearingPricePubkey = new PublicKey(clearingInitId);
 
   console.log(
     `[keeper ${options.keeperId}] try_match #${matchId} ` +
@@ -182,12 +182,13 @@ export async function runMatchCycle(
       { pubkey: pubkeyFromOrderField(orderB.sideCt), isSigner: false, isWritable: true },
       { pubkey: pubkeyFromOrderField(orderB.priceCt), isSigner: false, isWritable: true },
       { pubkey: pubkeyFromOrderField(orderB.sizeCt), isSigner: false, isWritable: true },
-      // Output cts — pre-existing accounts (gRPC createInput'd above) the
-      // execute_graph CPI overwrites in place. NOT signers — they already
-      // exist so no system_program create_account is needed downstream.
-      { pubkey: canMatchPubkey, isSigner: false, isWritable: true },
-      { pubkey: fillSizePubkey, isSigner: false, isWritable: true },
-      { pubkey: clearingPricePubkey, isSigner: false, isWritable: true },
+      // Output cts — FRESH keypair accounts. is_signer=true so the inner
+      // system_program::create_account inside execute_graph can authorise
+      // their allocation (the patched encrypt-anchor preserves this flag at
+      // the inner CPI; see crates/encrypt-anchor-vendor/src/lib.rs).
+      { pubkey: canMatchPubkey, isSigner: true, isWritable: true },
+      { pubkey: fillSizePubkey, isSigner: true, isWritable: true },
+      { pubkey: clearingPricePubkey, isSigner: true, isWritable: true },
       { pubkey: pdas.encryptProgram, isSigner: false, isWritable: false },
       { pubkey: pdas.config, isSigner: false, isWritable: true },
       { pubkey: pdas.deposit, isSigner: false, isWritable: true },
@@ -203,7 +204,16 @@ export async function runMatchCycle(
   const tryMatchTx = await sendAndConfirmTransaction(
     connection,
     new Transaction().add(ix),
-    dedupeSigners([keeperAuthority, payer]),
+    dedupeSigners([
+      keeperAuthority,
+      payer,
+      // The fresh output ct keypairs sign the outer tx so the patched
+      // encrypt-anchor's invoke_execute_graph can pass through is_signer=true
+      // to the inner system_program::create_account CPI (gap E2-residual).
+      canMatchKeypair,
+      fillSizeKeypair,
+      clearingPriceKeypair,
+    ]),
     { commitment: 'confirmed' },
   );
 
