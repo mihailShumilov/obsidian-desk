@@ -12,7 +12,16 @@ import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { AnchorProvider, Program, type Idl } from '@coral-xyz/anchor';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { btc as btcSdk, DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
+import { DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
+
+// Local mempool URL helper — keeps this server action tree-shake-free of
+// `@obsidian-desk/sdk/btc`, which pulls bitcoinjs-lib + tiny-secp256k1's
+// WASM. The Next.js standalone build doesn't include native-module WASM
+// assets by default, so importing the BTC sdk subpath crashed /positions
+// at request time with ENOENT on secp256k1.wasm.
+function mempoolSpaceTxUrl(txid: string, network: 'signet' | 'testnet'): string {
+  return `https://mempool.space/${network}/tx/${txid}`;
+}
 
 const RPC =
   process.env['SOLANA_RPC'] ??
@@ -181,7 +190,7 @@ export async function listMatches(): Promise<PositionRow[]> {
       clearingPriceSats: account.clearingPriceDecrypted.toString(),
       settleStatus: status,
       btcTxid,
-      btcExplorerUrl: btcTxid ? btcSdk.mempoolSpaceTxUrl(btcTxid, 'signet') : null,
+      btcExplorerUrl: btcTxid ? mempoolSpaceTxUrl(btcTxid, 'signet') : null,
       broadcastMode: recentEntry?.broadcastMode ?? null,
       finalizedAtSlot: account.finalizedAt.toString(),
       createdAtSlot: account.createdAt.toString(),
