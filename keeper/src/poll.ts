@@ -228,25 +228,28 @@ export async function pollOnce(
         account.sellerDwallet,
       );
       if (sellerOrderPubkey) {
-        try {
-          await consumeBtcApproval(
-            program,
-            sellerOrderPubkey,
-            account.market,
-            // Use the BIP-143 sighash of the unsigned tx as the message
-            // digest the keeper claims to be presenting. The keeper sdk
-            // exposes this; in a worker that can't import bitcoinjs-lib
-            // we'd accept a 32-byte zero placeholder.
-            await sighashFor(unsigned),
-            fillSats,
-          );
-        } catch (err) {
-          // No approval / consumed / expired / amount-exceeded → fail the
-          // settle rather than producing a tx the seller didn't authorise.
-          // Auto-fallback doesn't apply here — this is a logical gate.
-          throw new Error(
-            `consume_btc_approval rejected: ${err instanceof Error ? err.message : String(err)}`,
-          );
+        const consumed = await tryConsumeBtcApproval(
+          program,
+          sellerOrderPubkey,
+          account.market,
+          // Use the BIP-143 sighash of the unsigned tx as the message
+          // digest the keeper claims to be presenting.
+          await sighashFor(unsigned),
+          fillSats,
+          keeperId,
+        );
+        // Three outcomes:
+        //  - 'consumed': approval existed, consume succeeded. Strongest.
+        //  - 'missing': no approval PDA on-chain. Forward-compat with old
+        //               program versions and orders placed before frontend
+        //               wired the approve_btc_settlement call. Keeper logs
+        //               and falls through to settle — same security as
+        //               today's flow (keeper-authority gate still applies).
+        //  - 'rejected': approval exists but failed validation (consumed,
+        //                expired, amount exceeded). HARD STOP — refuse
+        //                to settle. This is the load-bearing case.
+        if (consumed === 'rejected') {
+          throw new Error('consume_btc_approval rejected — refusing to settle');
         }
       }
 
@@ -390,32 +393,67 @@ async function sighashFor(unsigned: { psbt: string; network: 'signet' | 'testnet
 }
 
 /**
- * Call `consume_btc_approval` on obsidian-core. Throws on any failure
- * (account missing, already consumed, expired, amount exceeded). Caller
- * marks the match as failed in that case rather than producing an
- * unauthorised settlement tx.
+ * Call `consume_btc_approval` on obsidian-core. Distinguishes three outcomes:
+ *
+ *  - 'consumed' — approval existed and was consumed cleanly.
+ *  - 'missing'  — the PDA doesn't exist (account-not-found). This happens
+ *                 when (a) the program version on-chain doesn't ship the
+ *                 BtcSettleApproval ix yet, or (b) the seller didn't call
+ *                 approve_btc_settlement at order time. Forward-compatible
+ *                 fall-through; caller continues with today's keeper-authority
+ *                 security model.
+ *  - 'rejected' — approval exists but validation failed (consumed, expired,
+ *                 amount exceeded, or any other on-chain rejection). Caller
+ *                 MUST refuse to settle — this is the security gate.
  */
-async function consumeBtcApproval(
+async function tryConsumeBtcApproval(
   program: LooseProgram,
   orderPubkey: PublicKey,
   marketPubkey: PublicKey,
   messageDigest: Buffer,
   outputAmountSats: bigint,
-): Promise<void> {
-  // PDA: (b"btc_approval", order_pubkey)
+  keeperId: string,
+): Promise<'consumed' | 'missing' | 'rejected'> {
   const [approvalPda] = PK.findProgramAddressSync(
     [Buffer.from('btc_approval'), orderPubkey.toBuffer()],
     program.programId,
   );
-  const methods = program.methods as LooseProgramMethods;
-  await methods['consumeBtcApproval']!(
-    Array.from(messageDigest) as unknown as number[],
-    new BN(outputAmountSats.toString()),
-  )
-    .accountsPartial({
-      approval: approvalPda,
-      market: marketPubkey,
-      keeperAuthority: program.provider.publicKey!,
-    })
-    .rpc({ commitment: 'confirmed' });
+
+  // Probe first — distinguish "PDA doesn't exist" from "PDA exists but
+  // consume failed". Anchor's getAccountInfo returns null for missing.
+  const conn = program.provider.connection;
+  const info = await conn.getAccountInfo(approvalPda);
+  if (info === null) {
+    console.log(
+      `[keeper ${keeperId}] no btc_approval PDA at ${approvalPda.toBase58().slice(0, 12)}… ` +
+        `(fwd-compat: program version pre-I4 OR seller skipped approve_btc_settlement)`,
+    );
+    return 'missing';
+  }
+
+  try {
+    const methods = program.methods as LooseProgramMethods;
+    await methods['consumeBtcApproval']!(
+      Array.from(messageDigest) as unknown as number[],
+      new BN(outputAmountSats.toString()),
+    )
+      .accountsPartial({
+        approval: approvalPda,
+        market: marketPubkey,
+        keeperAuthority: program.provider.publicKey!,
+      })
+      .rpc({ commitment: 'confirmed' });
+    return 'consumed';
+  } catch (err) {
+    // Method-not-found from the IDL → forward-compat fall-through. Common
+    // when the keeper container is on the new IDL but the on-chain program
+    // hasn't been upgraded yet.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('consumeBtcApproval') && msg.includes('not found')) {
+      console.log(`[keeper ${keeperId}] consume_btc_approval ix not on-chain yet — fall-through`);
+      return 'missing';
+    }
+    console.error(`[keeper ${keeperId}] consume_btc_approval rejected: ${msg}`);
+    return 'rejected';
+  }
 }
