@@ -102,7 +102,7 @@ pub struct SpvVerifiedTx {
 /// converts to its `ErrorCode::BtcProofInvalid` when needed.
 pub fn verify_merkle_inclusion(txid: &[u8; 32], proof_blob: &[u8]) -> Result<SpvVerifiedTx> {
     require!(
-        proof_blob.len() >= HEADER_LEN + 1,
+        proof_blob.len() > HEADER_LEN,
         crate::errors::ErrorCode::BtcProofInvalid
     );
 

@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 
 //! Account readers for Anchor programs.
+//!
+//! VENDORED for ObsidianDesk — see crates/encrypt-anchor-vendor/src/lib.rs
+//! for the vendor diff. This module is unchanged from upstream apart from
+//! these lint allows; we keep the upstream lifetime annotations verbatim so
+//! re-vendoring stays a clean cp.
+
+#![allow(clippy::needless_lifetimes)]
 
 use anchor_lang::prelude::*;
 use encrypt_types::encrypted::EncryptedType;
