@@ -105,7 +105,7 @@ pub struct EncryptedOrder {
 }
 ```
 
-The on-chain ciphertexts are *references* to Encrypt-program-owned ciphertext accounts, not inline blobs. Real ciphertext bytes live in `~100 B` accounts owned by the Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` (devnet). This closes gap E1 and makes E0 (`CT_MAX = 3000`) a leftover constant relevant only to the residual mock path.
+The on-chain ciphertexts are *references* to Encrypt-program-owned ciphertext accounts, not inline blobs. Real ciphertext bytes live in `~100 B` accounts owned by the Encrypt program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` (devnet). This closes gap E1 — gap E0 (the legacy `CT_MAX` blob-size constraint) became obsolete with the same change and the constant has been removed from `state.rs`.
 
 **Instructions:**
 

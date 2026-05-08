@@ -7,27 +7,41 @@
  * "Try Match" demo trigger + full MatchSettleModal lifecycle, and the
  * encrypted-book composition from zustand + synthetic filler.
  *
- * Real Anchor `submitOrder` call lands in P9 alongside WS subscriptions;
- * P7 wires the SDK `encryptOrder` so the choreography has real ciphertext
- * to show in the debug toast — but we don't submit to chain yet.
+ * On-chain submission path: when the connected wallet has a dWallet from
+ * the /deposit wizard AND `NEXT_PUBLIC_OBSIDIAN_MARKET` is configured, the
+ * form submission goes through the Encrypt gRPC server action +
+ * `submit_order` + `approve_btc_settlement` bundled tx via the wallet
+ * adapter. When prerequisites are missing or the network call fails, the
+ * page falls back to the local-only stub flow so the demo choreography
+ * still works.
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { useWallet } from '@solana/wallet-adapter-react';
-// We don't import `@obsidian-desk/sdk/encrypt` here even though we'd love
-// to call `encryptOrder` directly — its real-mode path dynamic-imports
-// `@encrypt.xyz/pre-alpha-solana-client/grpc` which transitively pulls
-// `@grpc/grpc-js`, and Turbopack still creates a client chunk for that
-// graph (failing the build with `Module not found: 'dns'/'fs'/'net'`).
-// The trade-page demo only needs a 16-byte random nonce as the order id;
-// real encryption belongs behind a Server Action when P9 lands.
+import {
+  useAnchorWallet,
+  useConnection,
+  useWallet,
+} from '@solana/wallet-adapter-react';
+import { PublicKey } from '@solana/web3.js';
+import type { Idl } from '@coral-xyz/anchor';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ChainBadge } from '@/components/obsidian/chain-badge';
 import { OrderbookVoid } from '@/components/obsidian/orderbook-void';
 import { OrderForm, type OrderFormSubmit } from '@/components/trade/order-form';
+import { useDwalletStore } from '@/stores/dwallet';
+import {
+  prepareEncryptedOrderAction,
+  getProgramSetupAction,
+  type ProgramSetup,
+} from './actions';
+import {
+  hexCtTo32,
+  hexNonceTo16,
+  submitOrderOnChain,
+} from '@/lib/trade/submit-on-chain';
 
 // lightweight-charts is ~80-120 KB gzipped and only renders after a layout
 // pass — splitting it off the /trade critical path lets the orderbook +
@@ -72,8 +86,27 @@ function anonAddr(): string {
   return `tb1q${rand32().slice(0, 36)}`;
 }
 
+/**
+ * Convert an Ika dWallet hex id (32 bytes hex-encoded) to a Solana
+ * `PublicKey`. The dWallet store holds these as hex; the on-chain
+ * `submit_order` ix expects the 32-byte raw form wrapped in a Pubkey.
+ */
+function dwalletHexToPubkey(hex: string): PublicKey {
+  if (hex.length !== 64) {
+    throw new Error(`dwallet id: expected 64 hex chars, got ${hex.length}`);
+  }
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return new PublicKey(bytes);
+}
+
 export function TradeTerminal(): JSX.Element {
   const wallet = useWallet();
+  const anchorWallet = useAnchorWallet();
+  const { connection } = useConnection();
+  const dwallet = useDwalletStore((s) => s.dwallet);
   const yourOrders = useOrderStore((s) => s.yourOrders);
   const pushOrder = useOrderStore((s) => s.pushOrder);
   const setStatus = useOrderStore((s) => s.setStatus);
@@ -81,6 +114,26 @@ export function TradeTerminal(): JSX.Element {
   const [toast, setToast] = useState<string | null>(null);
   const [match, setMatch] = useState<MatchInfo | null>(null);
   const matchCounter = useRef(0);
+
+  // Lazy-loaded once per session via the server action — caches IDL +
+  // market PDA + program ID on the server side. `null` while loading,
+  // `{ idl: null }` when the IDL file isn't present on the server (laptop
+  // without `anchor build` artefacts) — in that case we fall back to the
+  // stub submission path.
+  const [programSetup, setProgramSetup] = useState<ProgramSetup | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getProgramSetupAction()
+      .then((s) => {
+        if (!cancelled) setProgramSetup(s);
+      })
+      .catch(() => {
+        if (!cancelled) setProgramSetup({ programId: '', marketPubkey: null, idl: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ?admin=1 unlocks demo helpers (Match all, Fast-forward).
   // Read once on mount; URL changes after that don't toggle the panel.
@@ -95,10 +148,37 @@ export function TradeTerminal(): JSX.Element {
   );
   const book = useMemo(() => bookView(yourOrders), [yourOrders]);
 
+  /**
+   * Are all the prerequisites in place for an on-chain submission? When
+   * any of these are missing we fall through to the local-only stub flow
+   * so the demo choreography still resolves.
+   */
+  const onChainReady =
+    !!anchorWallet &&
+    !!dwallet &&
+    !!programSetup &&
+    !!programSetup.idl &&
+    !!programSetup.marketPubkey;
+
   async function handleSubmit(form: OrderFormSubmit): Promise<void> {
-    // Generate a 16-byte nonce for the order id. P9 will route this
-    // through a Server Action that calls the SDK's real-mode encryptOrder
-    // (which talks to the Encrypt gRPC service) before submitting on-chain.
+    if (onChainReady && anchorWallet && dwallet && programSetup?.marketPubkey && programSetup.idl) {
+      try {
+        await submitOnChain(form, anchorWallet, programSetup, dwallet.id);
+        return;
+      } catch (err) {
+        // Surface the failure but still keep the local choreography alive
+        // — the user shouldn't lose their order from the UI when the
+        // network rejects it. Could be a wallet-rejected popup, RPC
+        // outage, or expired order.
+        const msg = err instanceof Error ? err.message : String(err);
+        setToast(`On-chain submit failed — ${msg.slice(0, 80)} (kept locally)`);
+        setTimeout(() => setToast(null), 6000);
+      }
+    }
+    submitLocal(form);
+  }
+
+  function submitLocal(form: OrderFormSubmit): void {
     const nonce = new Uint8Array(16);
     globalThis.crypto.getRandomValues(nonce);
     const id = Array.from(nonce, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -113,10 +193,63 @@ export function TradeTerminal(): JSX.Element {
       txSignature: undefined,
     };
     pushOrder(next);
-
-    // Stub toast — real tx sig lands in P9.
     setToast(`Order sealed — ${id.slice(0, 12)}…`);
     setTimeout(() => setToast(null), 4000);
+  }
+
+  async function submitOnChain(
+    form: OrderFormSubmit,
+    aw: NonNullable<typeof anchorWallet>,
+    setup: ProgramSetup,
+    dwalletHexId: string,
+  ): Promise<void> {
+    if (!setup.marketPubkey || !setup.idl) {
+      throw new Error('on-chain submit: missing market or IDL');
+    }
+    // USDC → quote-units (×1e6); BTC → sats (×1e8).
+    const priceQuote = BigInt(Math.round(form.priceUsdc * 1_000_000));
+    const sizeBase = BigInt(Math.round(form.sizeBtc * 100_000_000));
+
+    const blob = await prepareEncryptedOrderAction({
+      side: form.side,
+      priceQuote: priceQuote.toString(),
+      sizeBase: sizeBase.toString(),
+    });
+
+    // Resolve the relative form expiry to an absolute slot the program
+    // accepts.
+    const currentSlot = BigInt(await connection.getSlot('confirmed'));
+    const expirySlot = currentSlot + BigInt(form.expirySlots);
+
+    const result = await submitOrderOnChain({
+      connection,
+      wallet: aw,
+      idl: setup.idl as Idl,
+      programId: new PublicKey(setup.programId),
+      market: new PublicKey(setup.marketPubkey),
+      sideCt: hexCtTo32(blob.sideCtHex),
+      priceCt: hexCtTo32(blob.priceCtHex),
+      sizeCt: hexCtTo32(blob.sizeCtHex),
+      nonce: hexNonceTo16(blob.nonceHex),
+      expirySlot,
+      dwalletId: dwalletHexToPubkey(dwalletHexId),
+      maxAmountSats: sizeBase,
+    });
+
+    pushOrder({
+      id: blob.nonceHex,
+      side: form.side,
+      priceUsdc: form.priceUsdc,
+      sizeBtc: form.sizeBtc,
+      expirySlots: form.expirySlots,
+      status: 'sealed',
+      createdAt: Date.now(),
+      txSignature: result.txSignature,
+    });
+    setToast(
+      `Submitted — ${result.txSignature.slice(0, 16)}… (${blob.mode} encrypt)`,
+    );
+    setTimeout(() => setToast(null), 6000);
   }
 
   function startMatch(targetId: string): void {

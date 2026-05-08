@@ -85,10 +85,13 @@ cd app
 vercel link              # one-time, picks an org + project
 vercel env add NEXT_PUBLIC_SOLANA_RPC production
 vercel env add NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID production
+vercel env add NEXT_PUBLIC_OBSIDIAN_MARKET production   # optional — see below
 vercel env add NEXT_PUBLIC_NETWORK production
 vercel env add OBSIDIAN_ESPLORA_URL production
 vercel --prod
 ```
+
+`NEXT_PUBLIC_OBSIDIAN_MARKET` is the base58 PDA of the `MarketState` to submit orders into. When set, the /trade page bundles `submit_order` + `approve_btc_settlement` into a single wallet-adapter-signed transaction; when unset, the page falls back to the local-only stub flow (orders only exist in the user's tab). Initialize a market with `tsx keeper/scripts/devnet-bootstrap.ts` and copy the `[bootstrap] market=…` line into the env.
 
 Vercel detects Next.js 16.2 zero-config. The `output: 'standalone'` in `app/next.config.ts` is required for the Docker fallback below; Vercel itself uses its own runtime.
 
@@ -104,6 +107,7 @@ Use this when Vercel isn't an option (e.g. you need a longer-lived edge or your 
 fly launch --no-deploy --copy-config --dockerfile app/Dockerfile
 fly secrets set NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com \
                 NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID=H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp \
+                NEXT_PUBLIC_OBSIDIAN_MARKET=<market-pda-base58> \
                 NEXT_PUBLIC_NETWORK=devnet \
                 OBSIDIAN_ESPLORA_URL=https://mempool.space/signet/api
 fly deploy

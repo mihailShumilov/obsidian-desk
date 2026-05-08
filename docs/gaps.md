@@ -7,21 +7,23 @@ once the underlying gap closes.
 
 ## Encrypt
 
-### E0. CT_MAX = 3000, not the prompt's 4096
-**Where:** `programs/obsidian-core/src/state.rs::CT_MAX`.
+### E0. ~~CT_MAX = 3000, not the prompt's 4096~~ — **OBSOLETE (subsumed by E1 closure)**
+**Where:** historic — `programs/obsidian-core/src/state.rs` no longer defines
+`CT_MAX`.
 
-**Reality:** Solana's `MAX_PERMITTED_DATA_INCREASE` caps account allocation
-inside a CPI at 10 240 bytes. With three inline `Vec<u8>` ciphertext fields
-in `EncryptedOrder` (and again in `MatchIntent`), 4096-byte ciphertexts
-overflow the cap (3 × 4096 + overhead ≈ 12.5 KB). A 3000-byte cap leaves
-~9.2 KB of allocation, well under the limit.
+**Original reality:** Solana's `MAX_PERMITTED_DATA_INCREASE` caps account
+allocation inside a CPI at 10 240 bytes. With three inline `Vec<u8>`
+ciphertext fields in `EncryptedOrder` (and again in `MatchIntent`),
+4096-byte ciphertexts overflowed the cap; a 3000-byte cap left ~9.2 KB of
+allocation, well under the limit.
 
-**Why deviate now:** the prompt's 4096 default doesn't account for the
-scaffold's choice to inline three ciphertexts in one PDA. The prompt
-explicitly licenses overrides ("override from docs/vendor").
-
-**Closure plan (P3):** vanishes when E1 closes — Pubkey references are
-32 bytes each, so account size drops to a few hundred bytes total.
+**Closure (alongside E1):** When `EncryptedOrder` and `MatchIntent` switched
+to holding 32-byte Ciphertext-account refs (`CT_REF_LEN = 32`), the inline
+blob constraint disappeared and the constant was removed. The only large
+inline cipher field left in the schema is the singleton
+`MarketState.total_volume_cipher` (capped by `TOTAL_VOLUME_CT_MAX = 4096`),
+which is on its own account and doesn't compete with anything for the CPI
+realloc budget.
 
 ### E1. ~~Inline `Vec<u8>` ciphertexts vs. keypair-account references~~ — **CLOSED**
 `EncryptedOrder` and `MatchIntent` now store `side_ct: [u8; 32]`, etc. as

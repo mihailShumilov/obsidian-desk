@@ -111,10 +111,17 @@ async function encryptViaGrpc(
 ): Promise<Uint8Array[]> {
   const client = await getEncryptClient();
   const programIdBytes = await solanaProgramIdBytes();
-  // Network encryption key — pre-alpha mock decryptor accepts a placeholder;
-  // production fetches the live key from the on-chain Encrypt config account.
-  // TODO(real-prod): pull `encryption_key` from the Config account at
-  //   `4ebfzW…ND8/seeds=[b"config"]`.
+  // Network encryption key — the pre-alpha decryptor accepts a 32-byte zero
+  // placeholder for input commitments. Production reads the live key from
+  // the `NetworkEncryptionKey` PDA (account discriminator 7, seeds
+  // `["network_encryption_key", key_bytes]`, current key picked via
+  // `EncryptConfig.current_epoch` — vendor docs §EncryptConfig + §NetworkEncryptionKey).
+  // The active key isn't published as a single fixed PDA; it rotates per
+  // epoch and is announced via `register_network_encryption_key` (disc 21).
+  // Until the upstream client exposes a `getActiveNetworkEncryptionKey()`
+  // helper, the 32-byte zero placeholder is what `createInput` accepts on
+  // pre-alpha-dev-1 — the executor re-encrypts inputs under the live key on
+  // its side. The placeholder is a pre-alpha quirk, not a security gap.
   const networkKey = Buffer.alloc(32);
   const r = await client.createInput({
     chain: 0, // ProtoChain.SOLANA = 0

@@ -139,7 +139,7 @@ When you change `sdk/src/encrypt.ts` or `sdk/src/ika.ts`, run `pnpm -F @obsidian
 solana logs --url devnet H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp | grep -E "consumed [0-9]+ of [0-9]+"
 ```
 
-Account-size pressure: `EncryptedOrder` and `MatchIntent` now hold 32-byte ciphertext-account refs (`[u8; 32]`), not inline `Vec<u8>`. Real ciphertext bytes (~100 B each) live in keypair accounts owned by the Encrypt program, so the 10 240 B CPI realloc cap that drove `CT_MAX = 3000` is no longer the binding constraint. The constant is still in `state.rs` as a leftover relevant only to the residual mock path.
+Account-size pressure: `EncryptedOrder` and `MatchIntent` now hold 32-byte ciphertext-account refs (`[u8; 32]`), not inline `Vec<u8>`. Real ciphertext bytes (~100 B each) live in keypair accounts owned by the Encrypt program, so the 10 240 B CPI realloc cap that drove the legacy `CT_MAX = 3000` ceiling is no longer the binding constraint. The only large inline blob left is `MarketState.total_volume_cipher` (capped by `TOTAL_VOLUME_CT_MAX = 4096`), which is a singleton and doesn't compete with anything for the CPI realloc budget.
 
 ## Adding a new market
 

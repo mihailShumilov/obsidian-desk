@@ -326,7 +326,7 @@ Anchor's WebSocket event listeners hang against a manually-spawned validator. Do
 <details>
 <summary><strong><code>Failed to reallocate account data</code></strong></summary>
 
-A ciphertext `Vec<u8>` exceeded `CT_MAX = 3000` bytes. Solana's CPI realloc cap is 10 240 B for the whole account; the three CT slots in `EncryptedOrder` plus the linked-list pointer share that budget. See gap E0 in [`docs/gaps.md`](docs/gaps.md).
+Historic — when ciphertexts were stored inline as `Vec<u8>`, the three CT slots in `EncryptedOrder` plus the linked-list pointer competed for the 10 240 B CPI realloc cap. Closed by gap E1 — `EncryptedOrder` and `MatchIntent` now hold 32-byte Ciphertext-account refs, so the on-chain account stays well under the cap. If you still hit this, you're touching the singleton `MarketState.total_volume_cipher` blob — check `TOTAL_VOLUME_CT_MAX` in `programs/obsidian-core/src/state.rs`.
 </details>
 
 <details>
@@ -393,8 +393,12 @@ Driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md), then close
 - [x] **I0** — Ika real-mode wired (vendored `sdk/src/ika-vendor/` from `@ika.xyz` 0.1.1 sources)
 - [x] **E1** — `EncryptedOrder` / `MatchIntent` now hold `[u8; 32]` ciphertext-account refs, not inline `Vec<u8>`
 - [x] **E2** — Anchor 1.0.2 / Rust 1.94 migration; `match_orders_graph` defined via `#[encrypt_fn]` DSL; on-chain CPI dispatch via `EncryptContext`
+- [x] **E2-residual** — Vendored `encrypt-anchor` v0.1.0 into `crates/encrypt-anchor-vendor/` and patched `invoke_execute_graph` so `is_signer` / `is_writable` propagate from the outer tx; the runtime CPI gate is closed (the residual sub-issue is an Encrypt-domain error documented in the table below)
 - [x] **E3** — Settlement path split into `request_decryption` + `finalize_decryption` with on-chain digest verification
 - [x] **E4** — `MatchIntent` snapshots three independent ciphertext digests (one per fill output)
+- [x] **I2** — Mock dWallet store now persists to `~/.obsidian-mock-keys.json` with atomic temp+rename writes and 0600 perms; docker compose mounts a shared `obsidian-keys` volume across `app` + `keeper`
+- [x] **I3** — `finalize_settlement` gated by `market.keeper_authority` + on-chain SPV merkle inclusion verifier (`programs/obsidian-core/src/spv.rs`); `MatchRecord.spv_verified` flag set true only when the on-chain verifier accepts the merkle path
+- [x] **I4** — On-chain `BtcSettleApproval` PDA + `approve_btc_settlement` (seller-signed) / `consume_btc_approval` (keeper-only) instructions; keeper integration in `keeper/src/poll.ts::consumeBtcApproval`
 - [x] **Devnet deploy** — `H25y…beLp` live on Solana devnet; `tsx keeper/scripts/devnet-bootstrap.ts` creates a market + two opposite-side orders backed by real Encrypt ciphertext accounts; `tsx keeper/scripts/match-pair.ts` exercises the full keeper matching loop
 
 ## Known gaps
@@ -403,11 +407,10 @@ Tracked in [`docs/gaps.md`](docs/gaps.md). High-impact items for reviewers:
 
 | ID | What | Impact | Workaround |
 |---|---|---|---|
-| **E0** | `CT_MAX = 3000` (not 4096) | Solana 10 240 B CPI realloc cap forced the smaller blob size | Accepted; only matters as long as ciphertexts were inline. Now that `EncryptedOrder` holds 32-byte CT refs, this is a leftover constant — kept around for the placeholder mock path. |
-| **E2-residual** | `execute_graph` CPI fails at depth 2 with a signer/writable demotion (`encrypt-anchor` 0.1.0's `invoke_execute_graph` hard-codes `is_signer=false` for `encrypt_execute_account`s) | Keeper's match-pair script reaches the CPI cleanly but stops there; no on-chain match settles end-to-end yet | Closes when upstream ships a CPI variant that propagates outer-tx signer flags, or we vendor + adapt the helper. Tracked in `docs/gaps.md`. |
-| **I1** | DKG shortcut still exists in `mock` mode (local secp256k1 keygen, not 2PC-MPC) | Mock mode is "single-key-with-correct-shape", not real DKG | Real mode (`OBSIDIAN_IKA_MODE=real`) hits the Ika gRPC for full DKG against `pre-alpha-dev-1.ika.ika-network.net:443`. |
-| **I2** | Mock dWallet store is process-local | Keeper can't see frontend-minted dWallets across separate processes in mock mode | Use `?admin=1` mode for cross-process demos; real-mode dWallets are network-resident on Ika and don't have this constraint. |
-| **I3** | `finalize_settlement` is permissionless | Anyone with a signed BTC tx hex can mark a match settled | Fix with SPV proof verification + keeper authority PDA in a follow-up. Adding only the keeper-keypair gate is performance theater without the proof check, so they ship together or not at all. |
+| **E2-residual (sub)** | After the vendored signer-propagation patch, `execute_graph` dispatches cleanly and Encrypt's program runs — then returns custom error `0x14` (=20). 0x14 is **not in the upstream IDL** (errors 0–17 documented). 1 978 CUs spent before exit; no `msg!` diagnostic. Likely cause: graph-hash registration drift or an undocumented config check past error 17. | No on-chain match settles end-to-end on devnet | Not closeable without an updated Encrypt IDL or upstream source access. The keeper's match decision runs off-chain in the meantime (`keeper/src/matching.ts`). |
+| **I1 (residual)** | Keeper authenticates to Ika gRPC with its own keypair, not the seller's. The on-chain `consume_btc_approval` PDA carries the security gate. | Ika gRPC `approval_proof` field still receives the keeper sig until Ika exposes a Solana-PDA-aware approval-proof shape | Upstream-blocked; the on-chain `BtcSettleApproval` PDA is the auditable authorisation today. |
+| **I3 (residual)** | SPV verifier accepts any 80-byte header — no proof-of-work check, no header-chain ring buffer | A keeper could in theory submit a header that commits to a real txid without being on the canonical chain | Deliberate scope cut — keeper-authority gate bounds who can submit. Trustless version would verify `sha256d(header) <= target_from_bits` and require `header.prev_hash` matches a recent stored header. |
+| **Frontend submit_order** | `app/.../trade-terminal.tsx::handleSubmit` only updates local React state; the wallet never signs a `submit_order` tx | The /trade page is a UI choreography demo, not an end-to-end flow | Keeper scripts (`devnet-bootstrap.ts`) submit on-chain; user-facing wallet-adapter flow is the next P9 wiring task. |
 
 ## Contributing
 
