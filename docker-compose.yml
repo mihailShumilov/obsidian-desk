@@ -91,6 +91,9 @@ services:
       - '13000:3000'
     volumes:
       - obsidian-keys:/var/obsidian/keys
+      # /positions reads MatchRecord PDAs via the IDL — same bind-mount as
+      # the keeper. Anchor's IDL ships per-build to target/idl on the host.
+      - ./target/idl:/app/target/idl:ro
     # `solana-validator` runs under the `local-rpc` profile (opt-in) —
     # don't make app a hard depend, otherwise `docker compose up`
     # without the profile blocks forever waiting for it. Users who do
