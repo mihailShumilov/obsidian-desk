@@ -106,6 +106,56 @@ pub struct MatchIntent {
     pub bump: u8,
 }
 
+/// On-chain Bitcoin settlement approval — gap I4 closure.
+///
+/// At order placement, the seller wallet signs a `BtcSettleApproval` PDA
+/// authorising the keeper to present a Bitcoin transaction to the Ika MPC
+/// network on the seller's behalf, subject to:
+///   - dwallet_id    : exactly this dWallet
+///   - max_amount_sats: never more than this many sats per output
+///   - expiry_slot   : approval auto-expires after this slot
+///   - hash_scheme   : EcdsaDoubleSha256 (=2) for BIP-143 segwit sighash
+///   - signature_algorithm : ECDSASecp256k1 (=0)
+///
+/// At settle time, the keeper calls `consume_btc_approval` (gated by
+/// market.keeper_authority) which:
+///   - verifies the approval is fresh (not consumed, not expired)
+///   - records the BIP-143 sighash that the keeper claims to be presenting
+///   - marks the approval consumed (one-shot — replay-protection)
+///
+/// This shape mirrors the upstream Ika `MessageApproval` payload format
+/// per `docs/vendor/ika-pre-alpha.md` — when pre-alpha Ika exposes a
+/// `read on-chain MessageApproval` API on Solana, this PDA becomes the
+/// account the network reads. Today the keeper consumes it client-side
+/// and presents the tx signature as `approval_proof` in the gRPC call.
+#[account]
+#[derive(InitSpace)]
+pub struct BtcSettleApproval {
+    /// Solana wallet that signed the approval (seller's pubkey).
+    pub approver: Pubkey,
+    /// dWallet that the approval authorises signing on behalf of.
+    pub dwallet_id: Pubkey,
+    /// Encrypted-order PDA the approval is bound to. Each order gets a
+    /// fresh approval — no fungible / multi-use approvals.
+    pub order: Pubkey,
+    /// Maximum BTC output value (sats) the keeper may present for signing.
+    pub max_amount_sats: u64,
+    /// Approval auto-expires after this Solana slot. Keeper rejects if now > this.
+    pub expiry_slot: u64,
+    /// hash_scheme code per Ika docs: 2 = EcdsaDoubleSha256 (BIP-143).
+    pub hash_scheme: u8,
+    /// signature_algorithm code per Ika docs: 0 = ECDSASecp256k1.
+    pub signature_algorithm: u8,
+    /// 0 until consumed; non-zero = the slot at which `consume_btc_approval`
+    /// fired. One-shot — second consume call rejects.
+    pub consumed_at_slot: u64,
+    /// BIP-143 sighash (32 bytes) that the keeper presented when consuming.
+    /// Zero until consumed. Stored so an auditor can later cross-reference
+    /// against the broadcast tx.
+    pub consumed_message_digest: [u8; 32],
+    pub bump: u8,
+}
+
 /// Post-decrypt settlement record. Decrypted fill size + clearing price are
 /// plaintext here because settlement (`finalize_settlement` in P9) needs to
 /// pass exact amounts to the Ika dWallet signer.

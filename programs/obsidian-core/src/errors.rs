@@ -34,4 +34,12 @@ pub enum ErrorCode {
     BtcProofTooLarge,
     #[msg("Arithmetic overflow")]
     ArithmeticOverflow,
+    #[msg("BtcSettleApproval has already been consumed (replay protection)")]
+    ApprovalAlreadyConsumed,
+    #[msg("BtcSettleApproval has expired (clock.slot >= expiry_slot)")]
+    ApprovalExpired,
+    #[msg("Output amount exceeds the approval's max_amount_sats bound")]
+    ApprovalAmountExceeded,
+    #[msg("BTC tx proof failed SPV / merkle inclusion verification")]
+    BtcProofInvalid,
 }

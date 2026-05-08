@@ -77,3 +77,27 @@ pub struct SettleFailedEvent {
     pub match_id: u64,
     pub reason_code: u16,
 }
+
+/// Emitted when a seller signs a `BtcSettleApproval` PDA — gap I4.
+#[event]
+pub struct BtcSettlementApproved {
+    pub approval: Pubkey,
+    pub approver: Pubkey,
+    pub order: Pubkey,
+    pub dwallet_id: Pubkey,
+    pub max_amount_sats: u64,
+    pub expiry_slot: u64,
+}
+
+/// Emitted when the keeper consumes a `BtcSettleApproval` at settle time.
+/// `message_digest` is the BIP-143 sighash the keeper presented to the
+/// Ika MPC network — auditable by anyone post-fact.
+#[event]
+pub struct BtcSettlementConsumed {
+    pub approval: Pubkey,
+    pub order: Pubkey,
+    pub dwallet_id: Pubkey,
+    pub message_digest: [u8; 32],
+    pub output_amount_sats: u64,
+    pub consumed_at_slot: u64,
+}

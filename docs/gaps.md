@@ -280,29 +280,49 @@ to authenticate to Ika, not the seller's. Production needs an on-chain
 `MessageApproval` (Solana ix) that the seller pre-authorises and the
 keeper presents to Ika at sign time. Tracked as **gap I4**.
 
-### I4. On-chain MessageApproval for keeper-side signing
-**Where:** `programs/obsidian-core/src/lib.rs` lacks an `approve_btc_message`
-ix that the seller signs at order placement, and a `present_approval` ix
-that the keeper calls at settle time.
+### I4. ~~On-chain MessageApproval for keeper-presented Ika auth~~ — **CLOSED for the on-chain layer**
+**Where:** `programs/obsidian-core/src/lib.rs` —
+`approve_btc_settlement` (seller-signed) + `consume_btc_approval` (keeper-only).
 
-**Reality:** Per `docs/vendor/ika-pre-alpha.md` line 27, the Ika network
-gates Sign requests on a Solana-side `MessageApproval` for
-`(dwallet_id, message_digest, hash_scheme, signature_algorithm)`. The
-current ObsidianDesk demo passes the keeper's identity to Ika instead
-of the seller's, which works when `creator == keeper_pubkey` (centralised
-demo dwallet) but breaks the zero-trust custody model.
+**Closure (2026-05-08):** Added `BtcSettleApproval` PDA at
+`(b"btc_approval", order_pubkey)`, plus two instructions:
 
-**Why deviate now:** I4 closure requires the on-chain Ika program to
-expose a stable `MessageApproval` API; the pre-alpha SDK doesn't yet
-ship a wallet-driven `MessageApproval` ix in obsidian-core's controllable
-surface. Demo runs in `auto` mode and falls back gracefully when real
-auth fails.
+1. `approve_btc_settlement(max_amount_sats, expiry_slot)` — seller signs
+   to authorise the keeper to present a Bitcoin settlement tx for this
+   specific order. Bound to `order.owner == approver`. PDA init means
+   replays fail at the constraint level. Stores `dwallet_id`,
+   `max_amount_sats`, `expiry_slot`, `hash_scheme=2 (EcdsaDoubleSha256
+   for BIP-143)`, `signature_algorithm=0 (ECDSASecp256k1)`.
 
-**Closure plan (next):** Add `approve_btc_settlement` (seller-signed,
-PDA-stored, references match_id + dwallet_id + max_amount), and
-`present_approval` (keeper-signed, reads PDA, builds the MessageApproval
-payload Ika expects). Wire from /trade order-placement so each sealed
-order pre-authorises its potential fills.
+2. `consume_btc_approval(message_digest, output_amount_sats)` — gated
+   by `market.keeper_authority`. Verifies (a) `consumed_at_slot == 0`
+   (replay protection — one-shot), (b) `clock.slot < expiry_slot`,
+   (c) `output_amount_sats <= max_amount_sats`. Records the actual
+   BIP-143 sighash the keeper presented to Ika so an auditor can
+   later cross-reference against the broadcast tx.
+
+Keeper integration (`keeper/src/poll.ts::consumeBtcApproval`): before
+calling `ikaSdk.requestSign`, the keeper finds the seller's order
+(whichever of `order_a / order_b` has `dwallet_id == seller_dwallet`),
+derives the BtcSettleApproval PDA, computes the BIP-143 sighash via
+`sdk/src/btc.ts::bip143SighashForP2WPKH`, and calls `consume_btc_approval`.
+If the gate fails (no approval / consumed / expired / amount exceeded),
+the match is marked failed — no unauthorised settle.
+
+`anchor build --no-idl --ignore-keys` compiles clean; keeper typechecks.
+
+**Residual surfaces (deliberate scope cut):**
+- **Frontend order-placement flow.** `app/.../trade/order-form.tsx` doesn't
+  yet call `submit_order` (still a P9 stub) so the per-order
+  `approve_btc_settlement` ix isn't wired into the wallet popup yet.
+  When P9 lands the frontend should bundle both ixs into a single Solana
+  tx so the user signs once.
+- **Ika gRPC `approval_proof` payload.** The pre-alpha gRPC's
+  `approval_proof` field today takes a Solana `transaction_signature`.
+  Once Ika exposes a Solana-PDA-aware approval-proof shape, the keeper
+  should pass the `consume_btc_approval` tx signature there. Today the
+  keeper still passes its own keypair signature, but the on-chain
+  consume gate is what carries the security.
 
 ### I2. ~~Mock dWallet store is process-local and in-memory~~ — **CLOSED**
 **Where:** `sdk/src/mock-store.ts::MockStore` (file-backed, atomic writes).

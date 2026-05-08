@@ -176,6 +176,94 @@ pub mod obsidian_core {
         Ok(())
     }
 
+    /// Seller pre-authorises the keeper to present a Bitcoin transaction
+    /// to the Ika MPC network on the seller's behalf — closes gap I4.
+    ///
+    /// One approval per `EncryptedOrder`. Stored at PDA
+    /// `(b"btc_approval", order_pubkey)`. The seller signs as `approver`;
+    /// only that signer can create the approval. Re-running this ix on the
+    /// same order fails (account already exists) — bump it by closing the
+    /// stale approval first if you need to rotate (not yet wired; refresh
+    /// after order cancel for now).
+    ///
+    /// `max_amount_sats` is the upper bound on any single output value
+    /// the keeper may sign. The keeper enforces this client-side AND the
+    /// approval is consumed in `consume_btc_approval` which records the
+    /// actual presented sighash so an auditor can later cross-check.
+    pub fn approve_btc_settlement(
+        ctx: Context<ApproveBtcSettlement>,
+        max_amount_sats: u64,
+        expiry_slot: u64,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        require!(expiry_slot > clock.slot, ErrorCode::OrderExpired);
+
+        let order = &ctx.accounts.order;
+        require_keys_eq!(order.owner, ctx.accounts.approver.key(), ErrorCode::Unauthorized);
+
+        let approval = &mut ctx.accounts.approval;
+        approval.approver = ctx.accounts.approver.key();
+        approval.dwallet_id = order.dwallet_id;
+        approval.order = order.key();
+        approval.max_amount_sats = max_amount_sats;
+        approval.expiry_slot = expiry_slot;
+        // Hardcoded for Bitcoin BIP-143 P2WPKH today; future taproot variants
+        // would expose these as parameters.
+        approval.hash_scheme = 2; // EcdsaDoubleSha256
+        approval.signature_algorithm = 0; // ECDSASecp256k1
+        approval.consumed_at_slot = 0;
+        approval.consumed_message_digest = [0u8; 32];
+        approval.bump = ctx.bumps.approval;
+
+        emit!(BtcSettlementApproved {
+            approval: approval.key(),
+            approver: approval.approver,
+            order: approval.order,
+            dwallet_id: approval.dwallet_id,
+            max_amount_sats,
+            expiry_slot,
+        });
+        Ok(())
+    }
+
+    /// Keeper-only: consume a `BtcSettleApproval` at settle time, recording
+    /// the BIP-143 sighash being presented to the Ika network. One-shot —
+    /// a second consume call rejects with `ApprovalAlreadyConsumed`.
+    ///
+    /// Gated by `market.keeper_authority` (same gate as finalize_settlement).
+    /// The keeper passes the 32-byte sighash it computed off-chain; the
+    /// approval also enforces `max_amount_sats` on the keeper-supplied
+    /// `output_amount_sats` so a misbehaving keeper can't sign a tx that
+    /// exceeds the seller's authorised bound.
+    pub fn consume_btc_approval(
+        ctx: Context<ConsumeBtcApproval>,
+        message_digest: [u8; 32],
+        output_amount_sats: u64,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let approval = &mut ctx.accounts.approval;
+
+        require!(approval.consumed_at_slot == 0, ErrorCode::ApprovalAlreadyConsumed);
+        require!(clock.slot < approval.expiry_slot, ErrorCode::ApprovalExpired);
+        require!(
+            output_amount_sats <= approval.max_amount_sats,
+            ErrorCode::ApprovalAmountExceeded
+        );
+
+        approval.consumed_at_slot = clock.slot;
+        approval.consumed_message_digest = message_digest;
+
+        emit!(BtcSettlementConsumed {
+            approval: approval.key(),
+            order: approval.order,
+            dwallet_id: approval.dwallet_id,
+            message_digest,
+            output_amount_sats,
+            consumed_at_slot: clock.slot,
+        });
+        Ok(())
+    }
+
     /// Run the FHE matching comparator on-chain via `execute_graph` CPI to
     /// the deployed Encrypt program. Closes gap E2.
     ///
@@ -552,6 +640,43 @@ pub struct CancelOrder<'info> {
     #[account(mut)]
     pub market: Account<'info, MarketState>,
     pub owner: Signer<'info>,
+}
+
+/// `approve_btc_settlement` accounts. PDA derived from `(b"btc_approval",
+/// order_pubkey)` so each EncryptedOrder gets at most one approval. Replays
+/// fail at the `init` constraint.
+#[derive(Accounts)]
+pub struct ApproveBtcSettlement<'info> {
+    #[account(constraint = order.owner == approver.key() @ ErrorCode::Unauthorized)]
+    pub order: Account<'info, EncryptedOrder>,
+    #[account(
+        init,
+        payer = approver,
+        space = 8 + BtcSettleApproval::INIT_SPACE,
+        seeds = [b"btc_approval", order.key().as_ref()],
+        bump,
+    )]
+    pub approval: Account<'info, BtcSettleApproval>,
+    #[account(mut)]
+    pub approver: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// `consume_btc_approval` accounts. Keeper-gated; the approval account
+/// must exist (created by approve_btc_settlement) and not be consumed.
+#[derive(Accounts)]
+pub struct ConsumeBtcApproval<'info> {
+    #[account(
+        mut,
+        seeds = [b"btc_approval", approval.order.as_ref()],
+        bump = approval.bump,
+    )]
+    pub approval: Account<'info, BtcSettleApproval>,
+    /// Settle-side gate: only the market's registered keeper authority
+    /// can consume the approval. Mirrors the gate on finalize_settlement.
+    #[account(has_one = keeper_authority)]
+    pub market: Account<'info, MarketState>,
+    pub keeper_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]

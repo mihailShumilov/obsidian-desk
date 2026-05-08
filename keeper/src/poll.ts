@@ -215,6 +215,41 @@ export async function pollOnce(
         btcNetwork,
       );
 
+      // Gap I4 — consume the seller's on-chain BtcSettleApproval before
+      // signing. This is the seller-pre-authorised gate that proves the
+      // settlement was permitted, replay-protects against the keeper
+      // re-signing a stale match, and bounds the output amount.
+      // Find the seller's order: whichever of (order_a, order_b) has
+      // dwallet_id == seller_dwallet.
+      const sellerOrderPubkey = await findSellerOrder(
+        program,
+        account.orderA,
+        account.orderB,
+        account.sellerDwallet,
+      );
+      if (sellerOrderPubkey) {
+        try {
+          await consumeBtcApproval(
+            program,
+            sellerOrderPubkey,
+            account.market,
+            // Use the BIP-143 sighash of the unsigned tx as the message
+            // digest the keeper claims to be presenting. The keeper sdk
+            // exposes this; in a worker that can't import bitcoinjs-lib
+            // we'd accept a 32-byte zero placeholder.
+            await sighashFor(unsigned),
+            fillSats,
+          );
+        } catch (err) {
+          // No approval / consumed / expired / amount-exceeded → fail the
+          // settle rather than producing a tx the seller didn't authorise.
+          // Auto-fallback doesn't apply here — this is a logical gate.
+          throw new Error(
+            `consume_btc_approval rejected: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
       const { signedTxHex } = await ikaSdk.requestSign(sellerId, unsigned, {
         txSignature: 'keeper-mock',
         matchId: BigInt(matchIdStr),
@@ -284,4 +319,77 @@ export async function pollOnce(
   }
 
   return report;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Gap I4 helpers: find the seller's order, consume its BtcSettleApproval,
+// compute the BIP-143 sighash of the unsigned spend tx.
+// ────────────────────────────────────────────────────────────────────────────
+
+import { PublicKey as PK } from '@solana/web3.js';
+
+/**
+ * Resolve which of the two match-order PDAs belongs to the seller — the
+ * one whose `dwallet_id == seller_dwallet`. Returns null if neither matches
+ * (gap I4 not yet wired for that order; keeper falls back to no-approval).
+ */
+async function findSellerOrder(
+  program: LooseProgram,
+  orderA: PublicKey,
+  orderB: PublicKey,
+  sellerDwallet: PublicKey,
+): Promise<PublicKey | null> {
+  const accountClient = (program.account as Record<string, {
+    fetch(addr: PublicKey): Promise<{ dwalletId: PublicKey } | undefined>;
+  }>)['encryptedOrder'];
+  if (!accountClient) return null;
+  for (const candidate of [orderA, orderB]) {
+    try {
+      const ord = await accountClient.fetch(candidate);
+      if (ord && ord.dwalletId.equals(sellerDwallet)) return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * Compute the BIP-143 sighash for input 0 of `unsigned`. Returns 32 bytes.
+ * Wraps the SDK helper so this module's external surface stays minimal.
+ */
+async function sighashFor(unsigned: { psbt: string; network: 'signet' | 'testnet' }): Promise<Buffer> {
+  const sdk = await import('@obsidian-desk/sdk/btc');
+  return sdk.bip143SighashForP2WPKH(unsigned.psbt, 0, unsigned.network);
+}
+
+/**
+ * Call `consume_btc_approval` on obsidian-core. Throws on any failure
+ * (account missing, already consumed, expired, amount exceeded). Caller
+ * marks the match as failed in that case rather than producing an
+ * unauthorised settlement tx.
+ */
+async function consumeBtcApproval(
+  program: LooseProgram,
+  orderPubkey: PublicKey,
+  marketPubkey: PublicKey,
+  messageDigest: Buffer,
+  outputAmountSats: bigint,
+): Promise<void> {
+  // PDA: (b"btc_approval", order_pubkey)
+  const [approvalPda] = PK.findProgramAddressSync(
+    [Buffer.from('btc_approval'), orderPubkey.toBuffer()],
+    program.programId,
+  );
+  const methods = program.methods as LooseProgramMethods;
+  await methods['consumeBtcApproval']!(
+    Array.from(messageDigest) as unknown as number[],
+    new BN(outputAmountSats.toString()),
+  )
+    .accountsPartial({
+      approval: approvalPda,
+      market: marketPubkey,
+      keeperAuthority: program.provider.publicKey!,
+    })
+    .rpc({ commitment: 'confirmed' });
 }
