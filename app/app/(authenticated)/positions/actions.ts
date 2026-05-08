@@ -8,9 +8,8 @@
  * that's not stored on-chain).
  */
 
-import { Connection, PublicKey } from '@solana/web3.js';
-import { AnchorProvider, Program, Wallet, type Idl } from '@coral-xyz/anchor';
-import { Keypair } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey } from '@solana/web3.js';
+import { AnchorProvider, Program, type Idl } from '@coral-xyz/anchor';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { btc as btcSdk, DEFAULT_OBSIDIAN_PROGRAM_ID } from '@obsidian-desk/sdk';
@@ -108,9 +107,17 @@ async function fetchKeeperRecent(): Promise<KeeperRecentSettlement[] | null> {
  */
 export async function listMatches(): Promise<PositionRow[]> {
   const conn = new Connection(RPC, 'confirmed');
-  // Read-only provider — we're not signing anything from the page.
-  const dummyWallet = new Wallet(Keypair.generate());
-  const provider = new AnchorProvider(conn, dummyWallet, {
+  // Read-only provider — we're not signing anything from the page. Anchor's
+  // Wallet class isn't reliably re-exported at runtime under Turbopack;
+  // construct a minimal-shape dummy that satisfies AnchorProvider.
+  const dummyKeypair = Keypair.generate();
+  const dummyWallet = {
+    publicKey: dummyKeypair.publicKey,
+    signTransaction: async <T>(tx: T): Promise<T> => tx,
+    signAllTransactions: async <T>(txs: T[]): Promise<T[]> => txs,
+    payer: dummyKeypair,
+  };
+  const provider = new AnchorProvider(conn, dummyWallet as never, {
     commitment: 'confirmed',
   });
   const idl = loadIdl();
