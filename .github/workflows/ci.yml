@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel any in-flight CI run for the same branch / PR — saves minutes
+# when devs push a fixup commit before the previous run finishes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: '24'
   # Rust 1.94 + Anchor 1.0.2 to match `rust-toolchain.toml` and the
@@ -13,10 +19,14 @@ env:
   RUST_TOOLCHAIN: '1.94'
   ANCHOR_VERSION: '1.0.2'
   SOLANA_INSTALL_URL: 'https://release.anza.xyz/stable/install'
+  # Force the v4 actions onto the runner's Node 24 so the deprecation
+  # warning for Node 20 doesn't clutter the logs (and we're ahead of the
+  # 2026-09-16 forced-removal date).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   ts:
-    name: TypeScript (typecheck + build)
+    name: TypeScript (typecheck + test + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,12 +42,20 @@ jobs:
       # whose types come from `sdk/dist/index.d.ts`. On a clean CI checkout
       # that file doesn't exist until the SDK is compiled, so plain
       # `pnpm -r typecheck` would fail with TS2307 in keeper/app.
-      - run: pnpm -F @obsidian-desk/sdk build
-      - run: pnpm -r typecheck
-      - run: pnpm -r build
+      - name: Build SDK (consumed by app + keeper for typecheck)
+        run: pnpm -F @obsidian-desk/sdk build
+      - name: SDK unit tests
+        # Covers the auto-fallback mode resolver, file-backed dWallet store,
+        # BIP-143 sighash + DER + low-s pipeline, mempool.space helpers,
+        # and the mainnet safety guard. ~74 tests, runs in <2s.
+        run: pnpm -F @obsidian-desk/sdk test
+      - name: Typecheck workspaces
+        run: pnpm -r typecheck
+      - name: Build workspaces
+        run: pnpm -r build
 
   rust:
-    name: Anchor build + clippy
+    name: Anchor build + clippy + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +70,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
       - name: Install Solana CLI (Agave)
         run: |
           sh -c "$(curl -sSfL ${{ env.SOLANA_INSTALL_URL }})"
@@ -67,6 +87,11 @@ jobs:
         # Skip --all-targets to keep `idl-build` cfg out of the compile;
         # workspace clippy still covers programs/* lib + tests.
         run: cargo clippy --workspace -- -D warnings
+      - name: cargo test (host-side unit tests)
+        # SPV merkle inclusion verifier lives in programs/obsidian-core/src/spv.rs
+        # and has 4 host-runnable tests. Adding any new pure-Rust unit tests
+        # under `#[cfg(test)]` blocks covers them automatically.
+        run: cargo test --workspace --lib
       - name: anchor build
         # `--no-idl` so the BPF compile completes before we try to extract
         # the IDL; v1's IDL build is a separate `anchor idl build` step.
@@ -75,3 +100,13 @@ jobs:
         # in lib.rs which matches the deployed devnet/localnet entries in
         # Anchor.toml.
         run: anchor build --no-idl --ignore-keys
+      - name: Upload program artifact
+        # Uploads target/deploy/obsidian_core.so so it can be picked up by
+        # release tags (anchor upgrade target/deploy/obsidian_core.so) without
+        # rebuilding locally. 90-day retention matches GitHub's default.
+        uses: actions/upload-artifact@v4
+        with:
+          name: obsidian_core-so
+          path: target/deploy/obsidian_core.so
+          retention-days: 90
+          if-no-files-found: error
