@@ -18,6 +18,8 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { useEffect, useRef } from 'react';
 import { getAddressBalanceAction } from '@/app/(authenticated)/deposit/actions';
 
+export type WizardMode = 'real-ok' | 'real-failed-fallback' | 'mock';
+
 export interface DwalletInfo {
   id: string;
   /** Bech32 P2WPKH address. */
@@ -33,11 +35,15 @@ interface DwalletState {
   totalSats: string;
   policyLocked: boolean;
   policyAccount: string | null;
+  /** Per-step mode markers — populated by the actions, rendered as badges
+   *  in the wizard. Not persisted (re-derived on each call). */
+  createMode: WizardMode | null;
+  lockMode: WizardMode | null;
   /** Wizard cursor — preserved across refreshes. */
   step: 'create' | 'fund' | 'lock' | 'done';
-  setDwallet(dw: DwalletInfo): void;
+  setDwallet(dw: DwalletInfo, mode?: WizardMode): void;
   setBalance(confirmed: bigint, total: bigint): void;
-  setPolicy(policyAccount: string): void;
+  setPolicy(policyAccount: string, mode?: WizardMode): void;
   setStep(s: DwalletState['step']): void;
   reset(): void;
 }
@@ -50,13 +56,15 @@ export const useDwalletStore = create<DwalletState>()(
       totalSats: '0',
       policyLocked: false,
       policyAccount: null,
+      createMode: null,
+      lockMode: null,
       step: 'create',
-      setDwallet: (dwallet) =>
-        set({ dwallet, step: 'fund', policyLocked: false }),
+      setDwallet: (dwallet, mode) =>
+        set({ dwallet, step: 'fund', policyLocked: false, createMode: mode ?? null }),
       setBalance: (confirmed, total) =>
         set({ balanceSats: confirmed.toString(), totalSats: total.toString() }),
-      setPolicy: (policyAccount) =>
-        set({ policyLocked: true, policyAccount, step: 'done' }),
+      setPolicy: (policyAccount, mode) =>
+        set({ policyLocked: true, policyAccount, step: 'done', lockMode: mode ?? null }),
       setStep: (step) => set({ step }),
       reset: () =>
         set({
@@ -65,6 +73,8 @@ export const useDwalletStore = create<DwalletState>()(
           totalSats: '0',
           policyLocked: false,
           policyAccount: null,
+          createMode: null,
+          lockMode: null,
           step: 'create',
         }),
     }),

@@ -36,6 +36,8 @@ import {
   DEFAULT_OBSIDIAN_PROGRAM_ID,
   assertNotMockOnMainnet,
   resolveMode,
+  setModeLogger,
+  type ResolvedMode,
 } from '@obsidian-desk/sdk';
 import { pollOnce, type PollReport, type UtxoProvider } from './poll.ts';
 import { loadKeypair } from './anchor-shims.ts';
@@ -49,6 +51,14 @@ const WALLET_PATH =
 const PROGRAM_ID_STR =
   process.env['OBSIDIAN_PROGRAM_ID'] ?? DEFAULT_OBSIDIAN_PROGRAM_ID;
 
+interface ModeCounters {
+  realOk: number;
+  realFailedFallback: number;
+  mock: number;
+}
+
+type SurfaceCounters = Record<'encrypt' | 'ika' | 'btc', ModeCounters>;
+
 interface MetricsSnapshot {
   bootedAt: string;
   ticks: number;
@@ -57,6 +67,20 @@ interface MetricsSnapshot {
   failed: number;
   lastTickAt: string | null;
   lastError: string | null;
+  /** Per-surface counts of which path real-mode dispatches took. Lets ops
+   *  see at a glance which subsystems are healthy on the live networks. */
+  modeCounts: SurfaceCounters;
+  /** Last 20 settled matches, with the BTC mode + txid for each. */
+  recentSettlements: Array<{
+    matchId: string;
+    btcTxid: string;
+    broadcastMode: ResolvedMode;
+    settledAt: string;
+  }>;
+}
+
+function emptyCounters(): ModeCounters {
+  return { realOk: 0, realFailedFallback: 0, mock: 0 };
 }
 
 function loadIdl(): Idl {
@@ -97,6 +121,21 @@ function bumpMetrics(metrics: MetricsSnapshot, report: PollReport, err?: unknown
   metrics.settled += report.settled.length;
   metrics.failed += report.failed.length;
   if (err) metrics.lastError = err instanceof Error ? err.message : String(err);
+
+  // Append every settlement's mode + txid to the rolling window. /positions
+  // can read this to badge each row with its real/fallback path without
+  // requiring a separate per-match log scrape.
+  for (const s of report.settled) {
+    metrics.recentSettlements.unshift({
+      matchId: s.matchId,
+      btcTxid: s.btcTxid,
+      broadcastMode: s.broadcastMode,
+      settledAt: new Date().toISOString(),
+    });
+  }
+  if (metrics.recentSettlements.length > 20) {
+    metrics.recentSettlements.length = 20;
+  }
 }
 
 async function main(): Promise<void> {
@@ -133,7 +172,24 @@ async function main(): Promise<void> {
     failed: 0,
     lastTickAt: null,
     lastError: null,
+    modeCounts: {
+      encrypt: emptyCounters(),
+      ika: emptyCounters(),
+      btc: emptyCounters(),
+    },
+    recentSettlements: [],
   };
+
+  // Wire the SDK's mode-event logger to also bump per-surface counters.
+  // Default behaviour (one-line JSON to stderr) is preserved by re-emitting
+  // the same line through the default sink.
+  setModeLogger((event) => {
+    const counters = metrics.modeCounts[event.surface];
+    if (event.mode === 'real-ok') counters.realOk += 1;
+    else if (event.mode === 'real-failed-fallback') counters.realFailedFallback += 1;
+    else counters.mock += 1;
+    process.stderr.write(`[obsidian-mode] ${JSON.stringify({ t: new Date().toISOString(), ...event })}\n`);
+  });
 
   const server = createServer((req, res) => {
     if (req.url === '/status') {

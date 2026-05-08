@@ -22,7 +22,7 @@ import { ProgressRail } from '@/components/deposit/progress-rail';
 import { StepShell } from '@/components/deposit/step-shell';
 import { KeyShards } from '@/components/deposit/key-shards';
 import { CopyButton } from '@/components/deposit/copy-button';
-import { useDwalletStore } from '@/stores/dwallet';
+import { useDwalletStore, type WizardMode } from '@/stores/dwallet';
 import { formatBtc, truncateAddress } from '@/lib/format';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
 import {
@@ -31,6 +31,12 @@ import {
 } from './actions';
 
 const FAUCET_URL = 'https://signet.bc-2.jp/';
+
+const MODE_LABEL: Record<WizardMode, string> = {
+  'real-ok': 'Ika MPC ✓',
+  'real-failed-fallback': 'mock fallback ⚠',
+  'mock': 'mock',
+};
 
 export function DepositWizard(): JSX.Element {
   const dwallet = useDwalletStore((s) => s.dwallet);
@@ -77,7 +83,8 @@ export function DepositWizard(): JSX.Element {
                 : 'pending'
           }
           dwalletAddress={dwallet?.address ?? null}
-          onCreated={(dw) => setDwallet(dw)}
+          mode={useDwalletStore.getState().createMode}
+          onCreated={(dw, mode) => setDwallet(dw, mode)}
         />
 
         <FundStep
@@ -95,7 +102,8 @@ export function DepositWizard(): JSX.Element {
           state={step === 'lock' ? 'active' : step === 'done' ? 'completed' : 'pending'}
           dwalletId={dwallet?.id ?? null}
           balanceSats={BigInt(balanceSats)}
-          onLocked={(account) => setPolicy(account)}
+          mode={useDwalletStore.getState().lockMode}
+          onLocked={(account, mode) => setPolicy(account, mode)}
           onBack={() => setStep('fund')}
         />
       </div>
@@ -108,11 +116,16 @@ export function DepositWizard(): JSX.Element {
 function CreateStep({
   state,
   dwalletAddress,
+  mode,
   onCreated,
 }: {
   state: 'pending' | 'active' | 'completed';
   dwalletAddress: string | null;
-  onCreated: (dw: { id: string; address: string; chain: 'bitcoin-signet' }) => void;
+  mode: WizardMode | null;
+  onCreated: (
+    dw: { id: string; address: string; chain: 'bitcoin-signet' },
+    mode: WizardMode,
+  ) => void;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +140,10 @@ function CreateStep({
     setError(null);
     try {
       const result = await createDWalletAction(publicKey.toBase58());
-      onCreated({ id: result.id, address: result.address, chain: 'bitcoin-signet' });
+      onCreated(
+        { id: result.id, address: result.address, chain: 'bitcoin-signet' },
+        result.mode,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -140,7 +156,11 @@ function CreateStep({
       index={1}
       title="Create dWallet"
       state={state}
-      summary={dwalletAddress ? truncateAddress(dwalletAddress) : undefined}
+      summary={
+        dwalletAddress
+          ? `${truncateAddress(dwalletAddress)}${mode ? ` · ${MODE_LABEL[mode]}` : ''}`
+          : undefined
+      }
     >
       <div className="grid gap-6 md:grid-cols-[1fr_auto]">
         <div>
@@ -275,13 +295,15 @@ function LockStep({
   state,
   dwalletId,
   balanceSats,
+  mode,
   onLocked,
   onBack,
 }: {
   state: 'pending' | 'active' | 'completed';
   dwalletId: string | null;
   balanceSats: bigint;
-  onLocked: (account: string) => void;
+  mode: WizardMode | null;
+  onLocked: (account: string, mode: WizardMode) => void;
   onBack: () => void;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
@@ -305,7 +327,7 @@ function LockStep({
         maxAmount.toString(),
         publicKey.toBase58(),
       );
-      onLocked(result.policyAccountOnSolana);
+      onLocked(result.policyAccountOnSolana, result.mode);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -314,7 +336,12 @@ function LockStep({
   }
 
   return (
-    <StepShell index={3} title="Lock to ObsidianDesk" state={state}>
+    <StepShell
+      index={3}
+      title="Lock to ObsidianDesk"
+      state={state}
+      summary={mode ? MODE_LABEL[mode] : undefined}
+    >
       <p className="text-sm text-muted">
         Authorize the ObsidianDesk Solana program to co-sign settlement
         transactions, subject to these constraints: only to matched
