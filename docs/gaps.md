@@ -83,6 +83,44 @@ The previous reproducer (CPI fails at depth 2 with `Cross-program invocation
 with unauthorized signer or writable account`) is the failure mode that now
 goes away.
 
+**Devnet verification result (2026-05-08):**
+- Re-deployed obsidian-core with the vendor-patched encrypt-anchor.
+- Switched keeper to CREATE-mode (fresh keypair output cts that sign the
+  outer tx).
+- Added `system_program` to invoke_execute_graph's fixed account list
+  (upstream omitted it; required for Encrypt's inner
+  `system_program::create_account` CPI in CREATE mode).
+
+Failure mode progression:
+| Attempt | Error |
+|---|---|
+| 1. Pre-patch (UPDATE mode) | depth-2 `writable privilege escalated` |
+| 2. Post-patch, UPDATE mode | depth-2 `signer privilege escalated` |
+| 3. Post-patch, CREATE mode (no system_program) | `An account required by the instruction is missing — Unknown program 11111111111111111111111111111111` |
+| 4. Post-patch, CREATE mode + system_program in metas | **CPI dispatches successfully → Encrypt runs → `custom program error: 0x14`** (1978 CUs spent before fail) |
+
+The runtime-level CPI gate is closed. Encrypt's program handler runs.
+
+**Residual: Encrypt-domain error 0x14 (=20).** The deployed Encrypt
+program at `4ebfzWdKnrnGseuQpezXdG8yCdHqwQ1SSBHD3bWArND8` returns custom
+error 20, which is **not in the upstream IDL** (`chains/solana/idl/encrypt_program.json`
+documents errors 0–17 only). The deployed binary's source isn't in the
+public `encrypt-pre-alpha` checkout — only the SDKs are. No `msg!()`
+diagnostic is emitted; the failure is a fast-path validation
+(1978 compute units consumed before exit).
+
+Likely root causes (informed by the IDL's 0–17 error list):
+- Graph hash registration drift — our compiled `match_orders_graph` may
+  hash to a value that doesn't match what the deployed Encrypt program
+  expects (Encrypt may require pre-registered graphs only).
+- Input ciphertext format mismatch — the gRPC-allocated input cts may
+  have a discriminator or payload layout that Encrypt's check rejects.
+- An undocumented permission / config check past error 17.
+
+Reproducing locally requires an Encrypt program built from a matching
+source rev. **This is not closeable from ObsidianDesk's side without
+either a more current Encrypt IDL or upstream source access.**
+
 **State (2026-05-07, devnet smoke):**
 - obsidian-core `1.0.2` deployed to Solana devnet at
   `H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp`.
