@@ -49,8 +49,9 @@ services:
       NEXT_PUBLIC_NETWORK: ${NEXT_PUBLIC_NETWORK:-devnet}
       OBSIDIAN_ESPLORA_URL: ${OBSIDIAN_ESPLORA_URL:-https://mempool.space/signet/api}
       # Tri-state modes — default `auto` (try real, fall back to mock on
-      # transient failure). See sdk/src/mode.ts.
-      OBSIDIAN_ENCRYPT_MODE: ${OBSIDIAN_ENCRYPT_MODE:-mock}
+      # transient failure). See sdk/src/mode.ts. assertNotMockOnMainnet
+      # still gates mainnet, so `auto` is safe on devnet/signet.
+      OBSIDIAN_ENCRYPT_MODE: ${OBSIDIAN_ENCRYPT_MODE:-auto}
       OBSIDIAN_IKA_MODE: ${OBSIDIAN_IKA_MODE:-auto}
       OBSIDIAN_BTC_MODE: ${OBSIDIAN_BTC_MODE:-auto}
       # Shared file-backed dWallet store across app + keeper.
