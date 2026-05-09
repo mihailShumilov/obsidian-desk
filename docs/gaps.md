@@ -351,12 +351,15 @@ the match is marked failed — no unauthorised settle.
 
 `anchor build --no-idl --ignore-keys` compiles clean; keeper typechecks.
 
+**Frontend wiring — CLOSED (2026-05-09):** `app/lib/trade/submit-on-chain.ts`
++ server actions (`prepareEncryptedOrderAction`, `getProgramSetupAction`)
+bundle `submit_order` + `approve_btc_settlement` into a single
+wallet-adapter-signed transaction so the trader signs once. The page gates
+on `NEXT_PUBLIC_OBSIDIAN_MARKET` (the base58 PDA of the `MarketState`):
+when set, the on-chain flow runs; when unset, the page falls back to the
+local-only stub.
+
 **Residual surfaces (deliberate scope cut):**
-- **Frontend order-placement flow.** `app/.../trade/order-form.tsx` doesn't
-  yet call `submit_order` (still a P9 stub) so the per-order
-  `approve_btc_settlement` ix isn't wired into the wallet popup yet.
-  When P9 lands the frontend should bundle both ixs into a single Solana
-  tx so the user signs once.
 - **Ika gRPC `approval_proof` payload.** The pre-alpha gRPC's
   `approval_proof` field today takes a Solana `transaction_signature`.
   Once Ika exposes a Solana-PDA-aware approval-proof shape, the keeper

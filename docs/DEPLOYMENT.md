@@ -240,11 +240,11 @@ The dev compose file (`docker-compose.yml`) defaults to `localhost:18899` (host 
 
 Pick one. The compose overlay defaults to `ghcr.io/mihailshumilov/obsidian-{app,keeper}:${IMAGE_TAG:-latest}`.
 
-**Option A — pull from GHCR** (matches the VPS path exactly, fewer moving parts on your laptop):
+**Option A — pull from GHCR** (matches the VPS path exactly, fewer moving parts on your laptop). Both `obsidian-app` and `obsidian-keeper` are **public** packages — no `docker login` required. CI publishes `:latest` and `:<full-sha>` tags on every push to `main` (`.github/workflows/ci.yml::publish-images`):
 
 ```bash
-docker login ghcr.io -u <your-github-username>   # only needed if the package is private
 # .env.local-devnet sets IMAGE_TAG; the overlay does the pull on `up`.
+docker pull ghcr.io/mihailshumilov/obsidian-app:latest    # works anonymously
 ```
 
 **Option B — build locally** (faster iteration when you're changing app/keeper code):
@@ -286,7 +286,7 @@ IMAGE_TAG=latest
 # Keeper signer — absolute path on the laptop. The compose `secrets` block
 # reads the file from this path and mounts it at /run/secrets/keeper_keypair.json
 # inside the container.
-KEEPER_KEYPAIR_PATH=/Users/<you>/path/to/encrypt-ika-obsidian-desk/scripts/.keeper-keypair.json
+KEEPER_KEYPAIR_PATH=/Users/<you>/path/to/obsidian-desk/scripts/.keeper-keypair.json
 ```
 
 For anything resembling real traffic, replace the public `api.devnet.solana.com` with a Helius / Triton / QuickNode devnet endpoint — the public RPC is heavily rate-limited and the wallet adapter will drop connections under load. Do this **here**, on your laptop, so you discover the rate limit before the VPS does.
@@ -347,17 +347,17 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 
 ### 5.7 (Optional) Build & push images to GHCR
 
-Skip this if you're staying with `IMAGE_TAG=latest` from CI. When you want to pin the VPS to a specific build, push it explicitly:
+CI does this automatically: every push to `main` runs `.github/workflows/ci.yml::publish-images`, which builds `linux/amd64` images and pushes them to `ghcr.io/mihailshumilov/obsidian-{app,keeper}` under both `:latest` and `:<full-sha>` tags. The packages are public — `docker pull` needs no auth. So the common path is **don't push from your laptop** — let CI do it on a `git push origin main`.
+
+Push manually only when iterating on a Dockerfile change you don't want to commit yet (`docker login ghcr.io -u <your-github-username>` first; needs a PAT with `write:packages`):
 
 ```bash
-docker login ghcr.io -u <your-github-username>
-
 VERSION=v0.2.0
-docker buildx build --platform linux/amd64,linux/arm64 \
+docker buildx build --platform linux/amd64 \
   -f app/Dockerfile -t ghcr.io/mihailshumilov/obsidian-app:$VERSION \
   --push .
 
-docker buildx build --platform linux/amd64,linux/arm64 \
+docker buildx build --platform linux/amd64 \
   -f keeper/Dockerfile -t ghcr.io/mihailshumilov/obsidian-keeper:$VERSION \
   --push .
 ```
@@ -395,7 +395,7 @@ Mock-mode Encrypt/Ika keeps the footprint small; the app is a standalone Next.js
 | vCPU | 1 | 2 | idles under 10 %; spikes during match bursts |
 | RAM | 1 GB | 2 GB | compose limits: app 512 MB, keeper 256 MB → leave ~1 GB for OS + reverse proxy |
 | Disk | 10 GB SSD | 20 GB | images ≈ 500 MB total; bulk is logs + IDL |
-| Arch | `x86_64` | `x86_64` | GHCR images are multi-arch (amd64 + arm64) — arm64 works, amd64 is the tested path |
+| Arch | `x86_64` | `x86_64` | CI publishes `linux/amd64` only — that's the live VPS arch. arm64 hosts must build locally (Option B) |
 | OS | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS | Debian 12 also fine |
 | Network | 1 public IPv4, ports 22 / 80 / 443 | + IPv6 | outbound to Solana RPC + `mempool.space` |
 | Domain | Cloudflare-managed zone | — | nameservers on Cloudflare so DNS + proxy + cert tools line up |
@@ -454,16 +454,32 @@ cd obsidian-desk
 cp .env.example .env.production
 ```
 
-`.env.production` is the **VPS twin** of `.env.local-devnet` from §5.3 — same variables, same values, different `KEEPER_KEYPAIR_PATH` (the VPS path), and `IMAGE_TAG` is pinned (don't ship `latest` to a public host):
+`.env.production` is the **VPS twin** of `.env.local-devnet` from §5.3 — same variables, same values, different `KEEPER_KEYPAIR_PATH` (the VPS path). The current production stack on `obsidiandesk.app` runs `IMAGE_TAG=latest` (CI publishes a fresh `:latest` on every `main` push); pin to a `:<full-sha>` only if you want to freeze a specific revision through a CI window:
 
 ```ini
 NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
 SOLANA_RPC=https://api.devnet.solana.com
 OBSIDIAN_PROGRAM_ID=H25yY5o4emorZ9qMHAUvJhdtrFjDSeYy2MVYurpQbeLp
+# Optional — base58 PDA of the MarketState the /trade page submits orders into.
+# When unset, /trade falls back to the local-only stub flow.
+NEXT_PUBLIC_OBSIDIAN_MARKET=<market-pda-base58>
 NEXT_PUBLIC_NETWORK=devnet
 OBSIDIAN_ESPLORA_URL=https://mempool.space/signet/api
-IMAGE_TAG=v0.2.0
+IMAGE_TAG=latest
 KEEPER_KEYPAIR_PATH=/home/obsidian/secrets/keeper-keypair.json
+```
+
+To create a market the production keeper can act on, run the bootstrap script **on your laptop** with `OBSIDIAN_KEEPER_AUTHORITY` set to the VPS keeper's pubkey:
+
+```bash
+# get the VPS keeper's pubkey
+ssh obsidian@<vps-ip> 'solana address --keypair ~/secrets/keeper-keypair.json'
+# bootstrap a fresh market authorised for that keeper
+OBSIDIAN_KEEPER_AUTHORITY=<vps-keeper-pubkey> \
+  ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
+  ANCHOR_WALLET=~/.config/solana/id.json \
+  pnpm exec tsx keeper/scripts/devnet-bootstrap.ts
+# copy the printed market PDA into NEXT_PUBLIC_OBSIDIAN_MARKET on the VPS
 ```
 
 If §5 used a Helius / Triton / QuickNode endpoint, copy the same URL here — the rate limit you fixed at §5.3 does not heal itself on the VPS.

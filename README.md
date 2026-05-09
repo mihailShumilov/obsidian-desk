@@ -262,6 +262,8 @@ Copy [`.env.example`](.env.example) — every variable with comments. Summary:
 | `ANCHOR_WALLET` | yes (keeper / scripts) | `~/.config/solana/id.json` | Keypair the keeper signs `finalize_settlement` with | keeper, anchor CLI |
 | `SOLANA_RPC` | docker compose only | `http://solana-validator:8899` | Internal docker-network alias for the keeper to reach the validator | keeper container |
 | `OBSIDIAN_PROGRAM_ID` / `NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID` | yes | `H25y…beLp` (devnet) | Pinned program id; must match `Anchor.toml` + `declare_id!()` | app, keeper, scripts |
+| `NEXT_PUBLIC_OBSIDIAN_MARKET` | no | unset | Base58 PDA of the `MarketState` to submit orders into. When set, `/trade` bundles `submit_order` + `approve_btc_settlement` into one wallet-adapter-signed tx; when unset, falls back to the local-only stub | app |
+| `OBSIDIAN_KEEPER_AUTHORITY` | no | payer pubkey | Override the `keeper_authority` written into `MarketState` at `initialize_market`. Use when bootstrapping a market on a workstation while the production keeper signs from a different machine | `keeper/scripts/devnet-bootstrap.ts` |
 | `NEXT_PUBLIC_NETWORK` | no | `devnet` | Label rendered in the header chip | app |
 | `OBSIDIAN_ESPLORA_URL` | no | `https://mempool.space/signet/api` | esplora-style API base for the deposit balance poll | app server actions |
 | `OBSIDIAN_ENCRYPT_MODE` | no | `mock` | `mock` (offline, deterministic) or `real` (live Encrypt gRPC against Solana devnet) | sdk |
@@ -399,7 +401,9 @@ Driven by the eleven prompts in [`docs/PROMPTS.md`](docs/PROMPTS.md), then close
 - [x] **I2** — Mock dWallet store now persists to `~/.obsidian-mock-keys.json` with atomic temp+rename writes and 0600 perms; docker compose mounts a shared `obsidian-keys` volume across `app` + `keeper`
 - [x] **I3** — `finalize_settlement` gated by `market.keeper_authority` + on-chain SPV merkle inclusion verifier (`programs/obsidian-core/src/spv.rs`); `MatchRecord.spv_verified` flag set true only when the on-chain verifier accepts the merkle path
 - [x] **I4** — On-chain `BtcSettleApproval` PDA + `approve_btc_settlement` (seller-signed) / `consume_btc_approval` (keeper-only) instructions; keeper integration in `keeper/src/poll.ts::consumeBtcApproval`
-- [x] **Devnet deploy** — `H25y…beLp` live on Solana devnet; `tsx keeper/scripts/devnet-bootstrap.ts` creates a market + two opposite-side orders backed by real Encrypt ciphertext accounts; `tsx keeper/scripts/match-pair.ts` exercises the full keeper matching loop
+- [x] **Frontend on-chain submit** — `app/lib/trade/submit-on-chain.ts` + server actions (`prepareEncryptedOrderAction`, `getProgramSetupAction`); `/trade` bundles `submit_order` + `approve_btc_settlement` into one wallet-adapter-signed tx. Gates on `NEXT_PUBLIC_OBSIDIAN_MARKET`; falls back to local-only stub when unset.
+- [x] **CI publish-images** — `.github/workflows/ci.yml::publish-images` builds and pushes `linux/amd64` images to GHCR (`obsidian-app`, `obsidian-keeper`) on every push to `main`. Tags: `:latest` + `:<full-sha>`. Packages are public — VPS pulls anonymously.
+- [x] **Devnet deploy** — `H25y…beLp` live on Solana devnet; `tsx keeper/scripts/devnet-bootstrap.ts` creates a market + two opposite-side orders backed by real Encrypt ciphertext accounts; `tsx keeper/scripts/match-pair.ts` exercises the full keeper matching loop. Bootstrap accepts `OBSIDIAN_KEEPER_AUTHORITY` env override so a market can be initialised on a workstation while the production keeper signs from the VPS.
 
 ## Known gaps
 
@@ -410,7 +414,6 @@ Tracked in [`docs/gaps.md`](docs/gaps.md). High-impact items for reviewers:
 | **E2-residual (sub)** | After the vendored signer-propagation patch, `execute_graph` dispatches cleanly and Encrypt's program runs — then returns custom error `0x14` (=20). 0x14 is **not in the upstream IDL** (errors 0–17 documented). 1 978 CUs spent before exit; no `msg!` diagnostic. Likely cause: graph-hash registration drift or an undocumented config check past error 17. | No on-chain match settles end-to-end on devnet | Not closeable without an updated Encrypt IDL or upstream source access. The keeper's match decision runs off-chain in the meantime (`keeper/src/matching.ts`). |
 | **I1 (residual)** | Keeper authenticates to Ika gRPC with its own keypair, not the seller's. The on-chain `consume_btc_approval` PDA carries the security gate. | Ika gRPC `approval_proof` field still receives the keeper sig until Ika exposes a Solana-PDA-aware approval-proof shape | Upstream-blocked; the on-chain `BtcSettleApproval` PDA is the auditable authorisation today. |
 | **I3 (residual)** | SPV verifier accepts any 80-byte header — no proof-of-work check, no header-chain ring buffer | A keeper could in theory submit a header that commits to a real txid without being on the canonical chain | Deliberate scope cut — keeper-authority gate bounds who can submit. Trustless version would verify `sha256d(header) <= target_from_bits` and require `header.prev_hash` matches a recent stored header. |
-| **Frontend submit_order** | `app/.../trade-terminal.tsx::handleSubmit` only updates local React state; the wallet never signs a `submit_order` tx | The /trade page is a UI choreography demo, not an end-to-end flow | Keeper scripts (`devnet-bootstrap.ts`) submit on-chain; user-facing wallet-adapter flow is the next P9 wiring task. |
 
 ## Contributing
 

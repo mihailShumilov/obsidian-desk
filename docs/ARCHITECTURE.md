@@ -273,16 +273,20 @@ Must-have — **shipped:**
 - [x] Client-side FHE encryption of orders (real-mode against devnet)
 - [x] On-chain FHE matching graph (`match_orders_graph` via `#[encrypt_fn]`)
 - [x] dWallet creation flow for BTC signet (real DKG via Ika gRPC in `OBSIDIAN_IKA_MODE=real`)
-- [x] Policy-gated settlement scaffolding
+- [x] On-chain seller-signed BTC settlement approval (`BtcSettleApproval` PDA + `approve_btc_settlement` / `consume_btc_approval`)
+- [x] On-chain SPV merkle inclusion verifier for BTC settlement proofs (`programs/obsidian-core/src/spv.rs`)
+- [x] Frontend on-chain submit flow (`app/lib/trade/submit-on-chain.ts` — bundles `submit_order` + `approve_btc_settlement` into one wallet-adapter-signed tx)
+- [x] Live demo deployed on a single VPS behind Cloudflare DNS + Caddy — <https://obsidiandesk.app>
+- [x] CI auto-publishes `linux/amd64` images to public GHCR on every push to `main` (`:latest` + `:<full-sha>`)
 - [x] Next.js app with killer UI (see UI_DESIGN.md)
 - [x] E2E demo (mock-mode end-to-end, `e2e-full.ts`)
 
 Open / residual:
-- [ ] **E2-residual** — `execute_graph` CPI fails at depth 2 with a signer demotion in `encrypt-anchor` 0.1.0; tracks closure on upstream (or vendor + adapt the helper)
+- [ ] **E2-residual sub-issue** — vendored `account_meta_for` patch (`crates/encrypt-anchor-vendor/`) closes the runtime CPI gate; deployed Encrypt program now returns custom error `0x14` (=20), which is **not in the upstream IDL**. Likely graph-hash registration drift; not closeable without a more current Encrypt IDL or upstream source. Keeper's match decision runs off-chain in the meantime (`keeper/src/matching.ts`).
+- [ ] **I1 / I4 residual** — Ika gRPC `approval_proof` field still receives keeper sig (auth gate is on-chain via `consume_btc_approval`, awaiting Ika's Solana-PDA-aware proof shape).
+- [ ] **I3 residual** — SPV verifier accepts any 80-byte header (no PoW check, no header-chain ring buffer); deliberate scope cut.
 - [ ] Partial fill handling
 - [ ] Multiple markets (ETH, SOL variants)
-- [ ] SPV-proof verification of BTC tx on Solana (true atomicity) — gap I3
-- [ ] On-chain keeper-authority gate paired with the SPV check (intentionally bundled — see I3)
 
 Explicitly out of scope:
 - Mainnet deployment
@@ -334,7 +338,7 @@ There is no `encrypt-mock` / `ika-mock` / `btc-signet` container. Encrypt / Ika 
 
 Two compose files:
 - `docker-compose.yml` — dev-friendly defaults. Profile `local-rpc` opts into the in-container validator on x86 Linux.
-- `docker-compose.prod.yml` — overlay that pulls images from GHCR (`IMAGE_TAG=v0.x.y`) and removes any local validator.
+- `docker-compose.prod.yml` — overlay that pulls images from GHCR and removes any local validator. Default `IMAGE_TAG=latest` (CI publishes a fresh `:latest` and `:<full-sha>` on every push to `main`); pin to a specific full-SHA tag for frozen rollbacks.
 
 Bring-up sequence on M-series Macs (the common case for the team):
 
@@ -353,7 +357,8 @@ Bring-up sequence on M-series Macs (the common case for the team):
 | `OBSIDIAN_ENCRYPT_MODE`, `OBSIDIAN_IKA_MODE` | `mock` (default) / `real` (live devnet gRPC) |
 | `OBSIDIAN_ENCRYPT_GRPC_URL`, `OBSIDIAN_IKA_GRPC_URL` | Override Encrypt / Ika gRPC endpoints |
 | `KEEPER_*` (`POLL_MS`, `PORT`, `FEERATE`, `KEYPAIR_PATH`, `DEBUG`) | Keeper tunables |
-| `IMAGE_TAG` | GHCR tag pulled by the prod overlay |
+| `IMAGE_TAG` | GHCR tag pulled by the prod overlay (default `latest`; `:<full-sha>` for pinned rollbacks) |
+| `NEXT_PUBLIC_OBSIDIAN_MARKET` | Optional base58 `MarketState` PDA for the `/trade` on-chain submit flow |
 
 Docker secrets path (`/run/secrets/keeper_keypair.json`) is preferred over bind-mount; never commit real keypairs.
 
@@ -365,9 +370,10 @@ Vercel / Fly.io are documented as planned alternatives but unused for the submis
 
 ### 12.6 CI/CD
 
-`.github/workflows/ci.yml` runs two jobs against every push to `main`:
+`.github/workflows/ci.yml` runs three jobs against every push to `main`:
 
-- `ts` — `pnpm install` → `pnpm -F @obsidian-desk/sdk build` (so workspace types resolve) → `pnpm -r typecheck` → `pnpm -r build`.
-- `rust` — pin Rust 1.94 + clippy/rustfmt → install Solana CLI → `cargo install anchor-cli@1.0.2 --locked` → `cargo clippy --workspace -- -D warnings` (no `--all-targets` to avoid the `idl-build` cfg) → `anchor build --no-idl --ignore-keys` (`--ignore-keys` because the program keypair is gitignored; the source-of-truth program id is `declare_id!()`).
+- `ts` — `pnpm install` → `pnpm -F @obsidian-desk/sdk build` (so workspace types resolve) → SDK unit tests (~74 tests) → `pnpm -r typecheck` → `pnpm -r build`.
+- `rust` — pin Rust 1.94 + clippy/rustfmt → install Solana CLI → `cargo install anchor-cli@1.0.2 --locked` → `cargo clippy --workspace -- -D warnings` (no `--all-targets` to avoid the `idl-build` cfg) → `cargo test --workspace --lib` (host-side unit tests including the SPV verifier) → `anchor build --no-idl --ignore-keys` (`--ignore-keys` because the program keypair is gitignored; the source-of-truth program id is `declare_id!()`) → upload `target/deploy/obsidian_core.so` as a 90-day artifact.
+- `publish-images` — `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`, `needs: [ts, rust]`. Matrix over `app` + `keeper`. Logs into GHCR with `secrets.GITHUB_TOKEN` (the package's "Manage Actions access" must include `mihailShumilov/obsidian-desk` with Write — set once via the GitHub web UI), `docker buildx build --platform linux/amd64`, pushes `:latest` and `:<full-sha>` tags. Cache via `type=gha` per matrix entry. Both packages are public so the VPS pulls anonymously.
 
 The `pnpm patch` for `@encrypt.xyz/pre-alpha-solana-client@0.1.1` is committed under `patches/` and re-applied by pnpm on every install.
