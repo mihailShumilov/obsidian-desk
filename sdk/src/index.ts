@@ -26,6 +26,7 @@ export {
 export type {
   Mode,
   ResolvedMode,
+  LoggedMode,
   Surface,
   ModeResult,
   ModeLogger,
