@@ -355,9 +355,23 @@ export async function requestSign(
       const sighash = bip143SighashForP2WPKH(btcTx.psbt, 0, btcTx.network);
 
       const presignId = await client.requestPresign(senderPubkey, dwalletAddrBytes);
-      const txSignatureBytes = hexToBytes(
-        solanaProof.txSignature.padStart(128, '0').slice(0, 128),
-      );
+      // The keeper passes the Solana tx-signature of the consume_btc_approval
+      // ix as the approval_proof here. Must be 128-char hex (64-byte ed25519
+      // sig). Without this guard, non-hex chars (e.g. the placeholder
+      // 'keeper-mock' or a base58 wallet-adapter sig) would parseInt() to NaN
+      // and silently feed 64 bytes of zeros to Ika as the approval_proof —
+      // which the network cannot verify but the keeper would treat as having
+      // produced a "valid" sign request.
+      const trimmedSig = solanaProof.txSignature.replace(/^0x/, '');
+      if (!/^[0-9a-fA-F]{128}$/.test(trimmedSig)) {
+        throw new VendorSDKUnavailableError(
+          'ika',
+          `real requestSign: solanaProof.txSignature must be 128-hex (64B), ` +
+            `got ${trimmedSig.length} chars (first 16: ${trimmedSig.slice(0, 16)}…). ` +
+            `Pass the hex-encoded consume_btc_approval signature, not the base58 form.`,
+        );
+      }
+      const txSignatureBytes = hexToBytes(trimmedSig);
       const sigBytes = await client.requestSign(
         senderPubkey,
         dwalletAddrBytes,
