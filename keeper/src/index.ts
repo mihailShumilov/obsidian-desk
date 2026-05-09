@@ -27,6 +27,7 @@ import {
   type Idl,
 } from '@coral-xyz/anchor';
 import { Connection, PublicKey } from '@solana/web3.js';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
@@ -90,6 +91,123 @@ function emptyCounters(): ModeCounters {
 function loadIdl(): Idl {
   const p = join(process.cwd(), 'target', 'idl', 'obsidian_core.json');
   return JSON.parse(readFileSync(p, 'utf8')) as Idl;
+}
+
+interface IdlAccountEntry {
+  name: string;
+  discriminator: number[];
+}
+
+/**
+ * Verify the bind-mounted IDL is aligned with the deployed program before
+ * the keeper starts polling. Two-layer check:
+ *
+ *   1. **Self-consistency** — for each `idl.accounts[]` entry, recompute the
+ *      Anchor discriminator (`sha256("account:<Name>")[..8]`) and compare to
+ *      the IDL's stored value. Catches a corrupted or hand-edited IDL on
+ *      disk before the keeper hits a confusing decode failure mid-poll.
+ *
+ *   2. **Live smoke test** — if `OBSIDIAN_MARKET_PUBKEY` (or the Next-public
+ *      `NEXT_PUBLIC_OBSIDIAN_MARKET` already in .env.production) is set,
+ *      fetch + decode the MarketState PDA at that address. Anchor's decoder
+ *      throws if the on-chain layout differs from what the IDL describes.
+ *      That is the load-bearing rolling-deploy check: when a future on-chain
+ *      layout change ships and the operator forgets to rsync the IDL (or
+ *      vice versa), the keeper refuses to start instead of silently
+ *      returning zero records from `matchRecord.all()`.
+ *
+ * Failure modes:
+ *   - IDL self-consistency mismatch  → THROW (corrupt IDL, refuse to start)
+ *   - MarketState fetch + decode fails with deserialize error → THROW
+ *   - MarketState account doesn't exist on chain  → WARN + continue
+ *     (devnet bootstrap not yet run; not a drift indicator)
+ *   - RPC unreachable                → WARN + continue (poll loop will
+ *     surface real errors with retry; we don't want crash-loops on a
+ *     transient RPC blip during boot)
+ *   - Env var unset                  → WARN, run check 1 only
+ */
+async function verifyIdlAlignment(program: Program<Idl>, idl: Idl): Promise<void> {
+  // Check 1: IDL self-consistency.
+  const accounts = (idl.accounts as IdlAccountEntry[] | undefined) ?? [];
+  for (const acct of accounts) {
+    const expected = createHash('sha256')
+      .update(`account:${acct.name}`)
+      .digest()
+      .subarray(0, 8);
+    const stored = Buffer.from(acct.discriminator);
+    if (!expected.equals(stored)) {
+      throw new Error(
+        `[keeper] IDL self-consistency failed for account ${acct.name}: ` +
+          `expected discriminator ${expected.toString('hex')}, ` +
+          `IDL has ${stored.toString('hex')}. ` +
+          `target/idl/obsidian_core.json is corrupted — re-rsync from a ` +
+          `fresh \`anchor build\` on the deploy host.`,
+      );
+    }
+  }
+
+  // Check 2: live decode of MarketState.
+  const marketAddr =
+    process.env['OBSIDIAN_MARKET_PUBKEY'] ??
+    process.env['NEXT_PUBLIC_OBSIDIAN_MARKET'];
+  if (!marketAddr) {
+    console.warn(
+      '[keeper] OBSIDIAN_MARKET_PUBKEY (or NEXT_PUBLIC_OBSIDIAN_MARKET) not set ' +
+        '— skipping live IDL alignment smoke test. Set it to catch ' +
+        'IDL/program drift on rolling deploys.',
+    );
+    return;
+  }
+
+  const marketPubkey = new PublicKey(marketAddr);
+  const accountClient = (program.account as Record<string, {
+    fetch(addr: PublicKey): Promise<unknown>;
+  }>)['marketState'];
+  if (!accountClient) {
+    throw new Error(
+      '[keeper] IDL has no `marketState` account — incompatible IDL. ' +
+        'Rebuild + rsync target/idl/obsidian_core.json.',
+    );
+  }
+
+  try {
+    await accountClient.fetch(marketPubkey);
+    console.log(
+      `[keeper] IDL alignment verified — decoded MarketState at ` +
+        `${marketAddr.slice(0, 12)}…`,
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    if (reason.includes('Account does not exist')) {
+      console.warn(
+        `[keeper] OBSIDIAN_MARKET_PUBKEY=${marketAddr.slice(0, 12)}… not on ` +
+          `chain — skipping live alignment check. (Run ` +
+          `scripts/devnet-bootstrap.ts to create one.)`,
+      );
+      return;
+    }
+    // Distinguish transient RPC failures from real layout mismatches.
+    // Network/connection errors get a warning + continue (the poll loop
+    // surfaces them with retry semantics). Decode failures are fatal —
+    // they mean the IDL on disk doesn't match the deployed program.
+    const isTransient = /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|503|504/i.test(reason);
+    if (isTransient) {
+      console.warn(
+        `[keeper] live IDL alignment check skipped — RPC unreachable at ` +
+          `boot: ${reason}. Will surface in the poll loop if the issue persists.`,
+      );
+      return;
+    }
+    throw new Error(
+      `[keeper] live IDL alignment check FAILED — could not decode ` +
+        `MarketState at ${marketAddr.slice(0, 12)}…: ${reason}. ` +
+        `Likely cause: the deployed program's account layout differs from ` +
+        `the IDL bind-mounted at target/idl/obsidian_core.json. ` +
+        `Either \`anchor deploy\` to push the new program OR rsync a fresh ` +
+        `IDL from \`anchor build\` to the keeper's target/idl/ — whichever ` +
+        `side is stale.`,
+    );
+  }
 }
 
 /**
@@ -167,6 +285,10 @@ async function main(): Promise<void> {
 
   // Validate program ID parses (catches obvious misconfiguration before RPC).
   new PublicKey(PROGRAM_ID_STR);
+
+  // Refuse to start if the bind-mounted IDL has drifted from the deployed
+  // program. See verifyIdlAlignment doc-comment for failure modes.
+  await verifyIdlAlignment(program, idl);
 
   const metrics: MetricsSnapshot = {
     bootedAt: new Date().toISOString(),
