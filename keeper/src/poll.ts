@@ -6,6 +6,7 @@
  * wrapper in index.ts just calls `pollOnce` on an interval.
  */
 
+import { createHash } from 'node:crypto';
 import BN from 'bn.js';
 import { utils } from '@coral-xyz/anchor';
 import type { PublicKey } from '@solana/web3.js';
@@ -271,6 +272,19 @@ export async function pollOnce(
         //                expired, amount exceeded). HARD STOP — refuse
         //                to broadcast. This is the load-bearing case.
         if (consumed === 'rejected') {
+          // Audit signal: a signed but unbroadcast tx exists in memory.
+          // Emit its sha256 (NOT the raw hex — that would re-introduce
+          // H4) so an auditor can later detect if this exact tx ever
+          // appears on chain via another path. The signed hex is dropped
+          // when this scope unwinds.
+          const signedTxSha256 = createHash('sha256')
+            .update(Buffer.from(signedTxHex, 'hex'))
+            .digest('hex');
+          console.warn(
+            `[keeper ${keeperId}] match ${matchIdStr} consume rejected ` +
+              `AFTER signing — signed-tx sha256=${signedTxSha256} ` +
+              `(${signedTxHex.length / 2}B); tx will not be broadcast`,
+          );
           throw new Error('consume_btc_approval rejected — refusing to broadcast');
         }
       }
