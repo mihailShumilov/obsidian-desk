@@ -22,6 +22,7 @@
  * agree on which dWallet a given id refers to — but no WIF is written.
  */
 
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -117,7 +118,11 @@ export class MockStore {
   private writeAll(entries: Map<string, MockEntry>): void {
     const dir = path.dirname(this.filePath);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const tmp = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
+    // Random suffix avoids collisions when two writers in the same process
+    // hit the same millisecond — pid+Date.now() was not unique enough under
+    // load (the second writeFileSync would overwrite the first's tmp file
+    // before the first's renameSync fired).
+    const tmp = `${this.filePath}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
     const obj: Record<string, MockEntry> = Object.fromEntries(entries);
     fs.writeFileSync(tmp, JSON.stringify(obj, replacer, 2), { mode: 0o600 });
     fs.renameSync(tmp, this.filePath);
