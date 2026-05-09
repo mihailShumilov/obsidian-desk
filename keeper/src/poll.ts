@@ -215,26 +215,48 @@ export async function pollOnce(
         btcNetwork,
       );
 
-      // Gap I4 — consume the seller's on-chain BtcSettleApproval before
-      // signing. This is the seller-pre-authorised gate that proves the
-      // settlement was permitted, replay-protects against the keeper
-      // re-signing a stale match, and bounds the output amount.
-      // Find the seller's order: whichever of (order_a, order_b) has
-      // dwallet_id == seller_dwallet.
+      // Compute the BIP-143 sighash off the unsigned PSBT — this is the
+      // exact digest that requestSign signs (real-mode passes it to Ika,
+      // mock-mode signs the same digest via bitcoinjs-lib). Recorded
+      // on-chain by consume_btc_approval so an auditor can later cross-
+      // reference against the broadcast tx's witness.
+      const sighash = await sighashFor(unsigned);
+
+      // Find the seller's order so we know which BtcSettleApproval PDA to
+      // consume. Whichever of (order_a, order_b) has dwallet_id ==
+      // seller_dwallet — the matcher already encoded that mapping into
+      // the MatchRecord, we just dereference.
       const sellerOrderPubkey = await findSellerOrder(
         program,
         account.orderA,
         account.orderB,
         account.sellerDwallet,
       );
+
+      // Sign FIRST, then consume the one-shot approval, then broadcast.
+      //
+      // The earlier ordering (consume → sign → broadcast) had a sharp
+      // edge: a transient signing failure would burn the seller's
+      // single-use approval without producing a settlement, leaving the
+      // seller stuck (the approval PDA is init-once per order, so they
+      // can't re-approve until expiry). Sign-first means we only spend
+      // the approval when we actually have a broadcast-ready tx.
+      //
+      // The audit trail still binds correctly: requestSign signs the
+      // exact `sighash` we computed above, and that's the digest we
+      // record on-chain — independent of whether the signer ran in
+      // real or mock mode.
+      const { signedTxHex } = await ikaSdk.requestSign(sellerId, unsigned, {
+        txSignature: 'keeper-mock',
+        matchId: BigInt(matchIdStr),
+      });
+
       if (sellerOrderPubkey) {
         const consumed = await tryConsumeBtcApproval(
           program,
           sellerOrderPubkey,
           account.market,
-          // Use the BIP-143 sighash of the unsigned tx as the message
-          // digest the keeper claims to be presenting.
-          await sighashFor(unsigned),
+          sighash,
           fillSats,
           keeperId,
         );
@@ -247,16 +269,11 @@ export async function pollOnce(
         //               today's flow (keeper-authority gate still applies).
         //  - 'rejected': approval exists but failed validation (consumed,
         //                expired, amount exceeded). HARD STOP — refuse
-        //                to settle. This is the load-bearing case.
+        //                to broadcast. This is the load-bearing case.
         if (consumed === 'rejected') {
-          throw new Error('consume_btc_approval rejected — refusing to settle');
+          throw new Error('consume_btc_approval rejected — refusing to broadcast');
         }
       }
-
-      const { signedTxHex } = await ikaSdk.requestSign(sellerId, unsigned, {
-        txSignature: 'keeper-mock',
-        matchId: BigInt(matchIdStr),
-      });
 
       // Broadcast to signet (auto-fallback to local txid derivation if
       // mempool.space is unreachable). The returned txid goes into
