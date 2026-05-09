@@ -59,6 +59,23 @@ export interface PrepareEncryptedOrderInput {
 export async function prepareEncryptedOrderAction(
   input: PrepareEncryptedOrderInput,
 ): Promise<PreparedOrderBlob> {
+  // BigInt() accepts decimal-only strings and throws SyntaxError on anything
+  // else. Surface a user-friendly error before that — `"1e5"`, `""`, or
+  // accidental whitespace would otherwise leak a SyntaxError stack to the
+  // browser response.
+  if (input.side !== 'bid' && input.side !== 'ask') {
+    throw new Error(`prepareEncryptedOrderAction: side must be 'bid' or 'ask'`);
+  }
+  if (!/^[1-9]\d*$/.test(input.priceQuote)) {
+    throw new Error(
+      `prepareEncryptedOrderAction: priceQuote must be a positive integer string`,
+    );
+  }
+  if (!/^[1-9]\d*$/.test(input.sizeBase)) {
+    throw new Error(
+      `prepareEncryptedOrderAction: sizeBase must be a positive integer string`,
+    );
+  }
   const mode = encryptSdk.currentMode();
   const blob = await encryptSdk.encryptOrder(
     input.side,
