@@ -37,10 +37,12 @@ export interface PreparedOrderBlob {
   sizeCtHex: string;
   /** 16-byte order nonce, hex-encoded — also seeds the order PDA. */
   nonceHex: string;
-  /** 'real' if the SDK was in real mode and the gRPC call succeeded, 'mock'
-   *  otherwise. Surfaces in the toast so reviewers can see whether the
-   *  ciphertext refs are network-resident or synthetic. */
-  mode: 'real' | 'mock';
+  /** Resolved mode: 'real-ok' if the SDK reached the Encrypt gRPC service,
+   *  'real-failed-fallback' if it tried real and fell back to mock on
+   *  transient failure, 'mock' if the SDK was forced to mock. Surfaces in
+   *  the toast so reviewers can see whether the ciphertext refs are
+   *  network-resident or synthetic. */
+  mode: 'real-ok' | 'real-failed-fallback' | 'mock';
 }
 
 export interface PrepareEncryptedOrderInput {
@@ -76,18 +78,21 @@ export async function prepareEncryptedOrderAction(
       `prepareEncryptedOrderAction: sizeBase must be a positive integer string`,
     );
   }
-  const mode = encryptSdk.currentMode();
   const blob = await encryptSdk.encryptOrder(
     input.side,
     BigInt(input.priceQuote),
     BigInt(input.sizeBase),
   );
+  // blob.mode is the resolved mode (real-ok / real-failed-fallback / mock)
+  // — what *actually* happened, not what was requested. Surfaces in the
+  // toast so the user can tell a real Encrypt-network commit from a
+  // local fallback when auto mode is in play.
   return {
     sideCtHex: Buffer.from(blob.side_ct).toString('hex'),
     priceCtHex: Buffer.from(blob.price_ct).toString('hex'),
     sizeCtHex: Buffer.from(blob.size_ct).toString('hex'),
     nonceHex: Buffer.from(blob.nonce).toString('hex'),
-    mode,
+    mode: blob.mode,
   };
 }
 

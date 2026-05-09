@@ -1,18 +1,15 @@
 /**
  * Client-side adapter for Encrypt FHE primitives.
  *
- * **Mode selection** — `OBSIDIAN_ENCRYPT_MODE` env var:
- *   - `mock`   (default) — deterministic byte encoding, round-trip recoverable.
- *                          For tests, scaffolding, and CI. Plaintext is
- *                          recoverable from the ciphertext bytes; never use
- *                          on real value flows.
- *   - `real`             — currently unsupported. The upstream
- *                          `@encrypt.xyz/pre-alpha-solana-client` ships its
- *                          gRPC client as uncompiled `.ts` files in the
- *                          `exports` field, and Node 24 refuses to strip TS
- *                          from `node_modules`
- *                          (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`).
- *                          See `docs/gaps.md` gap E5 for the closure plan.
+ * **Mode selection** — `OBSIDIAN_ENCRYPT_MODE` env var, tri-state via
+ * `sdk/src/mode.ts::resolveMode('encrypt')`:
+ *   - `mock`   — deterministic byte encoding, round-trip recoverable.
+ *                For tests, scaffolding, and CI.
+ *   - `real`   — call the deployed Encrypt gRPC service; throw on any
+ *                failure (no fallback).
+ *   - `auto`   (default) — call real first; fall back to mock on transient
+ *                failure (network down, gRPC unreachable). Logical errors
+ *                still throw — see mode.ts::isTransientError.
  *
  * **Zero leakage rule:** never log the plaintext order fields. Use
  * `describeCiphertext()` for safe diagnostic output (length + tag only).
@@ -23,6 +20,12 @@ import {
   EncryptionError,
   VendorSDKUnavailableError,
 } from './errors.ts';
+import {
+  resolveMode,
+  tryReal,
+  type Mode,
+  type ResolvedMode,
+} from './mode.ts';
 
 /**
  * WebCrypto is available in both Node 24 and the browser. Routing through
@@ -158,8 +161,12 @@ export interface EncryptedOrderBlob {
   nonce: Uint8Array;
 }
 
-export type EncryptMode = 'mock' | 'real';
-const MODE_ENV = 'OBSIDIAN_ENCRYPT_MODE';
+/**
+ * Tri-state Encrypt mode (`mock` | `real` | `auto`). Was a two-state union
+ * before — kept as a type alias for back-compat with code that destructured
+ * it. `currentMode()` now returns the tri-state value via `resolveMode`.
+ */
+export type EncryptMode = Mode;
 const U64_MAX = (1n << 64n) - 1n;
 
 /** Width of an Encrypt Ciphertext-account pubkey, used as the wire size for
@@ -172,7 +179,7 @@ export const CT_ID_LEN = 32;
 export const MOCK_TAG = 0xe3;
 
 export function currentMode(): EncryptMode {
-  return process.env[MODE_ENV] === 'real' ? 'real' : 'mock';
+  return resolveMode('encrypt');
 }
 
 /**
@@ -220,11 +227,17 @@ function mockUnpack(ct: Uint8Array): { fheType: number; value: bigint } {
 
 export async function encryptSide(side: Side): Promise<Uint8Array> {
   const value = side === 'bid' ? 0n : 1n;
-  if (currentMode() === 'real') {
-    const [id] = await encryptViaGrpc([{ value, fheType: FheType.EBool }]);
-    return id!;
-  }
-  return mockEncrypt(value, FheType.EBool);
+  const r = await tryReal<Uint8Array>({
+    surface: 'encrypt',
+    op: 'encryptSide',
+    mode: currentMode(),
+    real: async () => {
+      const [id] = await encryptViaGrpc([{ value, fheType: FheType.EBool }]);
+      return id!;
+    },
+    mock: async () => mockEncrypt(value, FheType.EBool),
+  });
+  return r.value;
 }
 
 export async function encryptU64(value: bigint): Promise<Uint8Array> {
@@ -232,53 +245,68 @@ export async function encryptU64(value: bigint): Promise<Uint8Array> {
     // Don't include the value in the message — zero leakage rule.
     throw new EncryptionError('encryptU64: value out of u64 range');
   }
-  if (currentMode() === 'real') {
-    const [id] = await encryptViaGrpc([{ value, fheType: FheType.EUint64 }]);
-    return id!;
-  }
-  return mockEncrypt(value, FheType.EUint64);
+  const r = await tryReal<Uint8Array>({
+    surface: 'encrypt',
+    op: 'encryptU64',
+    mode: currentMode(),
+    real: async () => {
+      const [id] = await encryptViaGrpc([{ value, fheType: FheType.EUint64 }]);
+      return id!;
+    },
+    mock: async () => mockEncrypt(value, FheType.EUint64),
+  });
+  return r.value;
 }
 
 export async function encryptOrder(
   side: Side,
   priceQuote: bigint,
   sizeBase: bigint,
-): Promise<EncryptedOrderBlob> {
+): Promise<EncryptedOrderBlob & { mode: ResolvedMode }> {
   if (priceQuote < 0n || priceQuote > U64_MAX || sizeBase < 0n || sizeBase > U64_MAX) {
     throw new EncryptionError('encryptOrder: price/size out of u64 range');
   }
-  if (currentMode() === 'real') {
-    // Real mode: one batched gRPC call so the upstream proof covers all
-    // three encrypted inputs together (cheaper + atomic).
-    const sideValue = side === 'bid' ? 0n : 1n;
-    const [side_ct, price_ct, size_ct] = await encryptViaGrpc([
-      { value: sideValue, fheType: FheType.EBool },
-      { value: priceQuote, fheType: FheType.EUint64 },
-      { value: sizeBase, fheType: FheType.EUint64 },
-    ]);
-    const nonce = randomBytes(16);
-    return { side_ct: side_ct!, price_ct: price_ct!, size_ct: size_ct!, nonce };
-  }
-  const [side_ct, price_ct, size_ct] = await Promise.all([
-    encryptSide(side),
-    encryptU64(priceQuote),
-    encryptU64(sizeBase),
-  ]);
+  const sideValue = side === 'bid' ? 0n : 1n;
+  // One tryReal call so real mode batches all three inputs into a single
+  // gRPC request (cheaper + atomic proof) and auto-fallback flips both
+  // dispatchers together — never a "side via real, price via mock" mix.
+  const r = await tryReal<{
+    side_ct: Uint8Array;
+    price_ct: Uint8Array;
+    size_ct: Uint8Array;
+  }>({
+    surface: 'encrypt',
+    op: 'encryptOrder',
+    mode: currentMode(),
+    real: async () => {
+      const [side_ct, price_ct, size_ct] = await encryptViaGrpc([
+        { value: sideValue, fheType: FheType.EBool },
+        { value: priceQuote, fheType: FheType.EUint64 },
+        { value: sizeBase, fheType: FheType.EUint64 },
+      ]);
+      return { side_ct: side_ct!, price_ct: price_ct!, size_ct: size_ct! };
+    },
+    mock: async () => ({
+      side_ct: mockEncrypt(sideValue, FheType.EBool),
+      price_ct: mockEncrypt(priceQuote, FheType.EUint64),
+      size_ct: mockEncrypt(sizeBase, FheType.EUint64),
+    }),
+  });
   const nonce = randomBytes(16);
-  return { side_ct, price_ct, size_ct, nonce };
+  return { ...r.value, nonce, mode: r.mode };
 }
 
 export async function requestThresholdDecrypt(
   ciphertext: Uint8Array,
   _txSignature: string,
 ): Promise<bigint> {
+  // requestThresholdDecrypt is a sync API the keeper uses in mock paths to
+  // recover the plaintext from a deterministic mock ciphertext. Real-mode
+  // decryption is async on-chain (request_decryption → finalize_decryption
+  // CPI flow); there is no synchronous gRPC equivalent. So we run mock
+  // unconditionally — auto and real both surface the same clean error if
+  // the caller passed a non-mock ciphertext.
   if (currentMode() === 'real') {
-    // Real-mode threshold decryption is async — `request_decryption` on
-    // chain emits an event, the off-chain decryptor responds in a later
-    // tx, and the program reads the result via `read_decrypted_verified`.
-    // The synchronous `requestThresholdDecrypt` from this client doesn't
-    // correspond to that flow; callers in real mode should use the
-    // on-chain CPI instead. We surface a clean error rather than a mock.
     throw new VendorSDKUnavailableError(
       'encrypt',
       'real requestThresholdDecrypt: decryption is async on-chain in real mode — ' +
