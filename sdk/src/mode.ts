@@ -20,7 +20,7 @@
 
 export type Mode = 'mock' | 'real' | 'auto';
 export type Surface = 'encrypt' | 'ika' | 'btc';
-export type ResolvedMode = 'real-ok' | 'real-failed-fallback' | 'mock';
+export type ResolvedMode = 'real-ok' | 'real-failed-fallback' | 'real-failed' | 'mock';
 
 export interface ModeResult<T> {
   /** Operation return value. */
@@ -188,13 +188,13 @@ export async function tryReal<T>(opts: TryRealOptions<T>): Promise<ModeResult<T>
 
     // Force-real: surface the failure to the caller. No fallback, no mocking.
     if (mode === 'real') {
-      activeLogger({ surface, op, mode: 'real-ok', latencyMs, fallbackReason: `THROW: ${reason}` });
+      activeLogger({ surface, op, mode: 'real-failed', latencyMs, fallbackReason: `THROW: ${reason}` });
       throw err;
     }
 
     // Auto mode: fall back only on transient failures. Logical errors throw.
     if (!isTransientError(err)) {
-      activeLogger({ surface, op, mode: 'real-ok', latencyMs, fallbackReason: `LOGICAL: ${reason}` });
+      activeLogger({ surface, op, mode: 'real-failed', latencyMs, fallbackReason: `LOGICAL: ${reason}` });
       throw err;
     }
 
