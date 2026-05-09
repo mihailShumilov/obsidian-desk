@@ -423,6 +423,12 @@ export async function fetchSpvProof(
     const proofRes = await fetch(`${base}/tx/${txid}/merkle-proof`, { signal });
     if (!proofRes.ok) return null;
     const proof = (await proofRes.json()) as EsploraMerkleProof;
+    // Skip zero-sibling (single-tx-block) proofs — the on-chain verifier
+    // rejects them since txid==merkle_root degenerates into "trust the
+    // header" and a fabricated 80-byte header passes trivially. Returning
+    // null falls back to txid-only mode (spv_verified stays false on-chain),
+    // which is the accurate signal.
+    if (!proof.merkle || proof.merkle.length === 0) return null;
 
     // Fetch the block header. /block-height returns the block hash; then
     // /block/<hash>/header returns the 80-byte header hex.

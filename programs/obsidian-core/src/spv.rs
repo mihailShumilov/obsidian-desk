@@ -114,6 +114,24 @@ pub fn verify_merkle_inclusion(txid: &[u8; 32], proof_blob: &[u8]) -> Result<Spv
 
     let (n_siblings, varint_len) = read_varint(proof_blob, HEADER_LEN)
         .ok_or(crate::errors::ErrorCode::BtcProofInvalid)?;
+    // Reject zero-sibling proofs.
+    //
+    // With n_siblings == 0 the merkle walk does nothing and the verifier
+    // collapses to `txid == merkle_root`. Any attacker who can supply an
+    // 80-byte header with `bytes[36..68] == txid` then passes verification
+    // for a tx that was never included in any block — including signet
+    // blocks the keeper just made up. The keeper-authority gate is
+    // load-bearing in that case but `spv_verified = true` would
+    // misrepresent the integrity check.
+    //
+    // The keeper instead falls through to txid-only mode (32-byte
+    // btc_tx_proof, spv_verified stays false) when the upstream returns
+    // an empty merkle path — accurate signal to auditors that no merkle
+    // path was actually walked.
+    require!(
+        n_siblings >= 1,
+        crate::errors::ErrorCode::BtcProofInvalid
+    );
     let path_start = HEADER_LEN + varint_len;
     let path_end = path_start
         .checked_add((n_siblings as usize).saturating_mul(33))
@@ -163,18 +181,20 @@ pub fn verify_merkle_inclusion(txid: &[u8; 32], proof_blob: &[u8]) -> Result<Spv
 mod tests {
     use super::*;
 
-    /// Single-element merkle tree — txid IS the merkle root, no siblings.
-    /// Useful to confirm the verifier accepts the trivial case.
+    /// Zero-sibling proofs are rejected — see the comment in
+    /// verify_merkle_inclusion. A 80-byte header where bytes[36..68]
+    /// equals the txid trivially passes the merkle check otherwise,
+    /// which lets a fabricated header satisfy the SPV gate. The keeper
+    /// records spv_verified=false in that case via txid-only mode.
     #[test]
-    fn single_tx_block_no_siblings() {
+    fn rejects_zero_sibling_proof() {
         let txid = [0xaau8; 32];
         let mut header = vec![0u8; HEADER_LEN];
         header[HEADER_MERKLE_ROOT_OFFSET..HEADER_MERKLE_ROOT_OFFSET + 32].copy_from_slice(&txid);
         let mut proof = header.clone();
         proof.push(0); // varint 0 — no siblings
 
-        let r = verify_merkle_inclusion(&txid, &proof).unwrap();
-        assert_eq!(r.merkle_depth, 0);
+        assert!(verify_merkle_inclusion(&txid, &proof).is_err());
     }
 
     /// Two-tx block: tx0 and tx1, root = sha256d(tx0 || tx1). Verify with
