@@ -110,3 +110,59 @@ jobs:
           path: target/deploy/obsidian_core.so
           retention-days: 90
           if-no-files-found: error
+
+  publish-images:
+    name: Build + push GHCR images
+    # Only on `main` pushes — don't ship images for PR commits or feature
+    # branches, and don't ship anything that hasn't passed the upstream jobs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [ts, rust]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required so GITHUB_TOKEN can push to ghcr.io/mihailshumilov/* —
+      # the package was originally created from a laptop PAT push, so on
+      # first run of this job the repo may need to be added under the
+      # package's "Manage Actions access" in the GitHub web UI before
+      # GITHUB_TOKEN gets accepted.
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: app
+            dockerfile: app/Dockerfile
+            image: ghcr.io/mihailshumilov/obsidian-app
+          - name: keeper
+            dockerfile: keeper/Dockerfile
+            image: ghcr.io/mihailshumilov/obsidian-keeper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push ${{ matrix.name }}
+        # linux/amd64 only — matches the VPS arch (Hetzner CX22 is x86_64).
+        # Add linux/arm64 here if a future host needs it; multi-arch
+        # roughly doubles the build time.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ matrix.image }}:latest
+            ${{ matrix.image }}:${{ github.sha }}
+          # `org.opencontainers.image.source` makes GHCR auto-link the
+          # package back to this repo, so the package settings page
+          # surfaces the right "linked repository" entry.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

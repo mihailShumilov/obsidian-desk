@@ -15,6 +15,9 @@
  * Env:
  *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com
  *   ANCHOR_WALLET=~/.config/solana/id.json
+ *   OBSIDIAN_KEEPER_AUTHORITY=<base58 pubkey>   (optional — defaults to the
+ *     payer pubkey; set this to the VPS keeper bot's pubkey when
+ *     bootstrapping a market the production keeper should be able to act on)
  */
 
 import { homedir } from 'node:os';
@@ -67,12 +70,17 @@ async function main(): Promise<void> {
     program.programId,
   );
 
+  const keeperAuthority = process.env['OBSIDIAN_KEEPER_AUTHORITY']
+    ? new PublicKey(process.env['OBSIDIAN_KEEPER_AUTHORITY'])
+    : wallet.publicKey;
+
   console.log(`[bootstrap] market=${market.toBase58()}`);
+  console.log(`[bootstrap] keeper_authority=${keeperAuthority.toBase58()}`);
   console.log(`[bootstrap] initializeMarket…`);
   const initSig = await methods['initializeMarket']!(
     baseMint,
     quoteMint,
-    wallet.publicKey,
+    keeperAuthority,
   )
     .accountsPartial({
       market,

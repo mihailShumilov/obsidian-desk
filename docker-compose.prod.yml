@@ -43,6 +43,9 @@ services:
       NEXT_PUBLIC_SOLANA_RPC: ${NEXT_PUBLIC_SOLANA_RPC:?set NEXT_PUBLIC_SOLANA_RPC}
       SOLANA_RPC: ${SOLANA_RPC:?set SOLANA_RPC}
       NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID: ${OBSIDIAN_PROGRAM_ID:?set OBSIDIAN_PROGRAM_ID}
+      # Market PDA the /trade page submits orders into. Optional — when
+      # unset, /trade falls back to the local-only stub flow.
+      NEXT_PUBLIC_OBSIDIAN_MARKET: ${NEXT_PUBLIC_OBSIDIAN_MARKET:-}
       NEXT_PUBLIC_NETWORK: ${NEXT_PUBLIC_NETWORK:-devnet}
       OBSIDIAN_ESPLORA_URL: ${OBSIDIAN_ESPLORA_URL:-https://mempool.space/signet/api}
       # Tri-state modes — default `auto` (try real, fall back to mock on
