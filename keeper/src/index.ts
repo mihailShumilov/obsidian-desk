@@ -54,6 +54,10 @@ const PROGRAM_ID_STR =
 interface ModeCounters {
   realOk: number;
   realFailedFallback: number;
+  /** Real path failed terminally and the call threw. The op that triggered
+   *  this also threw to its caller — useful as a distinct signal from
+   *  `realFailedFallback` so monitoring can alert on terminal failures. */
+  realFailed: number;
   mock: number;
 }
 
@@ -80,7 +84,7 @@ interface MetricsSnapshot {
 }
 
 function emptyCounters(): ModeCounters {
-  return { realOk: 0, realFailedFallback: 0, mock: 0 };
+  return { realOk: 0, realFailedFallback: 0, realFailed: 0, mock: 0 };
 }
 
 function loadIdl(): Idl {
@@ -187,6 +191,7 @@ async function main(): Promise<void> {
     const counters = metrics.modeCounts[event.surface];
     if (event.mode === 'real-ok') counters.realOk += 1;
     else if (event.mode === 'real-failed-fallback') counters.realFailedFallback += 1;
+    else if (event.mode === 'real-failed') counters.realFailed += 1;
     else counters.mock += 1;
     process.stderr.write(`[obsidian-mode] ${JSON.stringify({ t: new Date().toISOString(), ...event })}\n`);
   });

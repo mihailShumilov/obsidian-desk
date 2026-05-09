@@ -20,7 +20,13 @@
 
 export type Mode = 'mock' | 'real' | 'auto';
 export type Surface = 'encrypt' | 'ika' | 'btc';
-export type ResolvedMode = 'real-ok' | 'real-failed-fallback' | 'real-failed' | 'mock';
+/** What `tryReal` *returns*. `real-failed` is logged-only — when the real
+ *  path fails terminally `tryReal` throws, so it never surfaces here. */
+export type ResolvedMode = 'real-ok' | 'real-failed-fallback' | 'mock';
+/** What the logger callback may receive. Adds `real-failed` for the two
+ *  throw branches (force-real failure, auto-mode logical-error) so
+ *  monitoring can distinguish failures from successes. */
+export type LoggedMode = ResolvedMode | 'real-failed';
 
 export interface ModeResult<T> {
   /** Operation return value. */
@@ -58,7 +64,7 @@ export interface ModeLogger {
   (event: {
     surface: Surface;
     op: string;
-    mode: ResolvedMode;
+    mode: LoggedMode;
     latencyMs: number;
     fallbackReason?: string;
   }): void;
