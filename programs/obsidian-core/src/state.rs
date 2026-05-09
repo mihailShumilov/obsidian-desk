@@ -135,6 +135,13 @@ pub struct BtcSettleApproval {
     pub approver: Pubkey,
     /// dWallet that the approval authorises signing on behalf of.
     pub dwallet_id: Pubkey,
+    /// MarketState the approval (and its order) belong to. Mirrored from
+    /// `order.market` at approve-time so `consume_btc_approval` can enforce
+    /// that the keeper consuming the approval is the keeper-authority of
+    /// the SAME market the order was placed on. Without this, any market
+    /// sharing the keeper's authority key could consume an unrelated
+    /// market's approval — see review finding C2.
+    pub market: Pubkey,
     /// Encrypted-order PDA the approval is bound to. Each order gets a
     /// fresh approval — no fungible / multi-use approvals.
     pub order: Pubkey,

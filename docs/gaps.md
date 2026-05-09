@@ -330,16 +330,20 @@ keeper presents to Ika at sign time. Tracked as **gap I4**.
 1. `approve_btc_settlement(max_amount_sats, expiry_slot)` — seller signs
    to authorise the keeper to present a Bitcoin settlement tx for this
    specific order. Bound to `order.owner == approver`. PDA init means
-   replays fail at the constraint level. Stores `dwallet_id`,
-   `max_amount_sats`, `expiry_slot`, `hash_scheme=2 (EcdsaDoubleSha256
-   for BIP-143)`, `signature_algorithm=0 (ECDSASecp256k1)`.
+   replays fail at the constraint level. Stores `dwallet_id`, `market`
+   (mirrored from `order.market`), `max_amount_sats`, `expiry_slot`,
+   `hash_scheme=2 (EcdsaDoubleSha256 for BIP-143)`,
+   `signature_algorithm=0 (ECDSASecp256k1)`.
 
 2. `consume_btc_approval(message_digest, output_amount_sats)` — gated
-   by `market.keeper_authority`. Verifies (a) `consumed_at_slot == 0`
-   (replay protection — one-shot), (b) `clock.slot < expiry_slot`,
-   (c) `output_amount_sats <= max_amount_sats`. Records the actual
-   BIP-143 sighash the keeper presented to Ika so an auditor can
-   later cross-reference against the broadcast tx.
+   by `market.keeper_authority` AND `has_one = market` on the approval
+   (so a keeper-authority shared across markets cannot consume an
+   unrelated market's approval — review finding C2). Verifies
+   (a) `consumed_at_slot == 0` (replay protection — one-shot),
+   (b) `clock.slot < expiry_slot`, (c) `output_amount_sats <=
+   max_amount_sats`. Records the actual BIP-143 sighash the keeper
+   presented to Ika so an auditor can later cross-reference against
+   the broadcast tx.
 
 Keeper integration (`keeper/src/poll.ts::consumeBtcApproval`): before
 calling `ikaSdk.requestSign`, the keeper finds the seller's order

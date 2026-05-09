@@ -205,6 +205,7 @@ pub mod obsidian_core {
         let approval = &mut ctx.accounts.approval;
         approval.approver = ctx.accounts.approver.key();
         approval.dwallet_id = order.dwallet_id;
+        approval.market = order.market;
         approval.order = order.key();
         approval.max_amount_sats = max_amount_sats;
         approval.expiry_slot = expiry_slot;
@@ -687,10 +688,15 @@ pub struct ApproveBtcSettlement<'info> {
 /// must exist (created by approve_btc_settlement) and not be consumed.
 #[derive(Accounts)]
 pub struct ConsumeBtcApproval<'info> {
+    /// `has_one = market` ties the approval to the SAME market whose
+    /// keeper_authority is consuming it — without this, any market
+    /// sharing the keeper-authority key could consume an unrelated
+    /// market's approval (review finding C2).
     #[account(
         mut,
         seeds = [b"btc_approval", approval.order.as_ref()],
         bump = approval.bump,
+        has_one = market @ ErrorCode::Unauthorized,
     )]
     pub approval: Account<'info, BtcSettleApproval>,
     /// Settle-side gate: only the market's registered keeper authority
