@@ -6,12 +6,31 @@
  * wrapper in index.ts just calls `pollOnce` on an interval.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, createPrivateKey, sign as cryptoSign } from 'node:crypto';
 import BN from 'bn.js';
 import { utils } from '@coral-xyz/anchor';
 import type { PublicKey } from '@solana/web3.js';
 import { btc as btcSdkDefault, type SpendInput } from '@obsidian-desk/sdk';
 import type { LooseProgram, LooseProgramMethods } from './anchor-shims.ts';
+
+/**
+ * Sign `msg` with a Solana ed25519 keypair (the 64-byte secretKey produced
+ * by `Keypair.fromSecretKey`) and return a 128-char lowercase hex string —
+ * the format the SDK's `requestSign` regex now requires for the Ika
+ * approval_proof field. The first 32 bytes of `secretKey` are the seed;
+ * we wrap them in a PKCS#8 envelope and use Node's native ed25519.
+ */
+function ed25519SignHex(secretKey: Uint8Array, msg: Buffer): string {
+  const seed = Buffer.from(secretKey.subarray(0, 32));
+  // OID 1.3.101.112 (ed25519) PKCS#8 prefix + 32-byte seed.
+  const PKCS8_ED25519_PREFIX = Buffer.from(
+    '302e020100300506032b657004220420',
+    'hex',
+  );
+  const der = Buffer.concat([PKCS8_ED25519_PREFIX, seed]);
+  const key = createPrivateKey({ key: der, format: 'der', type: 'pkcs8' });
+  return cryptoSign(null, msg, key).toString('hex');
+}
 
 /**
  * Byte offset of `settle_status` inside a Borsh-serialized `MatchRecord`:
@@ -247,8 +266,20 @@ export async function pollOnce(
       // exact `sighash` we computed above, and that's the digest we
       // record on-chain — independent of whether the signer ran in
       // real or mock mode.
+      //
+      // approval_proof: the SDK now enforces 128-hex (real ed25519 sig).
+      // Sign the BIP-143 sighash with the keeper's own keypair so the
+      // proof is non-forgeable + bound to this exact match. Falls back
+      // to the legacy 'keeper-mock' literal only when no payer keypair
+      // is reachable (in-process tests with synthetic AnchorProvider) —
+      // those run in OBSIDIAN_IKA_MODE=mock so the regex never fires.
+      const wallet = (program.provider as unknown as { wallet?: { payer?: { secretKey: Uint8Array } } }).wallet;
+      const approvalProof = wallet?.payer?.secretKey
+        ? ed25519SignHex(wallet.payer.secretKey, Buffer.from(sighash))
+        : 'keeper-mock';
+
       const { signedTxHex } = await ikaSdk.requestSign(sellerId, unsigned, {
-        txSignature: 'keeper-mock',
+        txSignature: approvalProof,
         matchId: BigInt(matchIdStr),
       });
 
