@@ -209,26 +209,25 @@ function solanaPubkeyToBytes(b58: string): Uint8Array {
   // bs58 alphabet — small inline impl avoids pulling @solana/web3.js into
   // the SDK's import graph just for one decode.
   const ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  if (b58.length === 0) throw new Error('invalid base58: empty string');
   let n = 0n;
   for (const c of b58) {
     const idx = ALPHA.indexOf(c);
     if (idx < 0) throw new Error('invalid base58 char');
     n = n * 58n + BigInt(idx);
   }
-  // Pad to 32 bytes (Solana pubkeys are exactly 32B; leading zeros encode as '1').
+  // A Solana pubkey is exactly 32 bytes; any decode that overflows is not a
+  // valid pubkey. Reject explicitly rather than silently truncating high bits
+  // in the byte-write loop below — base58 alphabets accept arbitrary lengths
+  // so a typo or wrong-length input would otherwise produce 32 bytes of
+  // unrelated value.
+  if (n >> 256n !== 0n) {
+    throw new Error('invalid base58: decoded value exceeds 32 bytes');
+  }
   const out = new Uint8Array(32);
   for (let i = 31; i >= 0; i--) {
     out[i] = Number(n & 0xffn);
     n >>= 8n;
-  }
-  // Account for leading-zero pad bytes encoded as '1' chars.
-  let zeros = 0;
-  for (const c of b58) {
-    if (c === '1') zeros++;
-    else break;
-  }
-  if (zeros > 0 && out.slice(0, zeros).some((x) => x !== 0)) {
-    // High bytes already non-zero — nothing to do.
   }
   return out;
 }
