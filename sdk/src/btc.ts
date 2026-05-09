@@ -311,6 +311,14 @@ function sha256Hex(input: string): string {
   return Buffer.from(bjsCrypto.sha256(Buffer.from(input, 'utf8'))).toString('hex');
 }
 
+/** Replace any run of 64+ hex chars with a length-tagged placeholder so
+ *  signed tx hex (or txids) echoed back by upstream services don't land in
+ *  logs verbatim. Conservative: any 64+ hex run is suspicious in this
+ *  context, even if it's a txid rather than a full tx. */
+function redactHexRuns(s: string): string {
+  return s.replace(/[0-9a-fA-F]{64,}/g, (m) => `<${m.length}B-hex-redacted>`);
+}
+
 /**
  * Broadcast a finalised tx hex to signet (or testnet). Returns the txid the
  * upstream relay reports back. In mock/auto-fallback mode, returns a
@@ -342,8 +350,13 @@ export async function broadcastTx(
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
+        // Esplora rejection bodies sometimes echo the submitted tx hex back
+        // (e.g. "sendrawtransaction RPC error: ... <hex>"). Redact any long
+        // hex run before surfacing the error so signed tx hex doesn't end
+        // up in keeper logs / [obsidian-mode] stderr.
+        const safeBody = redactHexRuns(body).slice(0, 200);
         const err: Error & { status?: number } = new Error(
-          `esplora POST /tx returned ${res.status}: ${body.slice(0, 200)}`,
+          `esplora POST /tx returned ${res.status}: ${safeBody}`,
         );
         err.status = res.status;
         throw err;
