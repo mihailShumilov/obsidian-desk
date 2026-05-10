@@ -199,13 +199,22 @@ export function TradeTerminal(): JSX.Element {
    * Are all the prerequisites in place for an on-chain submission? When
    * any of these are missing we fall through to the local-only stub flow
    * so the demo choreography still resolves.
+   *
+   * `dwallet.id` is a 32-byte hex string (64 chars). The persisted-store
+   * shape briefly held empty strings during a refactor; if a user still
+   * has that broken state in localStorage, we want to fail-closed with a
+   * banner rather than silently entering submitOnChain and watching it
+   * throw inside the hex parser.
    */
+  const dwalletIdValid =
+    !!dwallet && dwallet.id.length === 64 && /^[0-9a-fA-F]+$/.test(dwallet.id);
   const onChainReady =
     !!anchorWallet &&
-    !!dwallet &&
+    dwalletIdValid &&
     !!programSetup &&
     !!programSetup.idl &&
     !!programSetup.marketPubkey;
+  const dwalletNeedsRecreate = !!dwallet && !dwalletIdValid;
 
   async function handleSubmit(form: OrderFormSubmit): Promise<void> {
     if (onChainReady && anchorWallet && dwallet && programSetup?.marketPubkey && programSetup.idl) {
@@ -362,6 +371,23 @@ export function TradeTerminal(): JSX.Element {
         fastSettle={fastSettle}
         onToggleFast={() => setFastSettle((v) => !v)}
       />
+
+      {dwalletNeedsRecreate && (
+        <div className="mb-5 flex items-start gap-3 rounded-lg border border-bitcoin-ember/40 bg-bitcoin-ember/10 p-4 text-sm">
+          <span aria-hidden="true" className="text-base text-bitcoin-ember">⚠</span>
+          <div className="flex-1">
+            <p className="font-medium text-foreground">
+              Your dWallet is missing its on-chain id — orders will not reach Solana.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              This is a stale-localStorage shape from an earlier deploy.
+              Open <Link href="/deposit" className="text-cipher-cyan-dim underline hover:text-cipher-cyan">/deposit</Link>,
+              click <em className="not-italic">Reset dWallet (start over)</em>, then re-onboard.
+              Until you do, every order will only be sealed in the local UI.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(260px,0.9fr)_minmax(480px,1.5fr)_minmax(300px,1fr)]">
         {/* Left — encrypted book */}
