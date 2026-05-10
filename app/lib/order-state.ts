@@ -25,6 +25,18 @@ export interface YourOrder {
   status: Status;
   createdAt: number;
   txSignature?: string;
+  /** On-chain order with no local plaintext — submitted from another device
+   *  or after a localStorage wipe. The wizard renders "encrypted" instead
+   *  of price/size and disables the local cancel button. Status is still
+   *  authoritative because it comes from the on-chain enum. */
+  encrypted?: boolean;
+}
+
+/** Minimal on-chain row shape — mirrors `OnChainOrderRow` from
+ *  `app/(authenticated)/trade/actions.ts` to avoid circular imports. */
+export interface OnChainOrderHydration {
+  nonceHex: string;
+  status: 'active' | 'matched' | 'cancelled' | 'expired';
 }
 
 export interface BookRow {
@@ -41,6 +53,20 @@ interface OrderState {
   pushOrder(o: YourOrder): void;
   cancelOrder(id: string): void;
   setStatus(id: string, status: Status): void;
+  /** Merge the chain's view of the user's orders into the local tape.
+   *  - If a row matches an existing local entry by nonce, advance its
+   *    status (without clobbering local-only refinements like 'settling').
+   *  - If no local entry exists, insert an `encrypted: true` placeholder. */
+  hydrateFromChain(rows: OnChainOrderHydration[]): void;
+}
+
+function mergeStatus(local: Status, chain: OnChainOrderHydration['status']): Status {
+  // Local 'settling'/'settled' carries finer-grained UI state (the demo
+  // modal animation) that the chain enum doesn't model — preserve it.
+  if (local === 'settled' || local === 'settling') return local;
+  if (chain === 'active') return local === 'matched' ? 'matched' : 'sealed';
+  if (chain === 'matched') return 'matched';
+  return 'cancelled';
 }
 
 export const useOrderStore = create<OrderState>()(
@@ -61,6 +87,32 @@ export const useOrderStore = create<OrderState>()(
             o.id === id ? { ...o, status } : o,
           ),
         })),
+      hydrateFromChain: (rows) =>
+        set((s) => {
+          const byNonce = new Map(rows.map((r) => [r.nonceHex.toLowerCase(), r]));
+          const merged = s.yourOrders.map((o) => {
+            const chain = byNonce.get(o.id.toLowerCase());
+            if (!chain) return o;
+            byNonce.delete(o.id.toLowerCase());
+            return { ...o, status: mergeStatus(o.status, chain.status) };
+          });
+          // Anything left in byNonce is on-chain but unknown to the local tape.
+          const placeholders: YourOrder[] = Array.from(byNonce.values()).map((r) => ({
+            id: r.nonceHex,
+            // We don't know the side without the plaintext — render as 'ask'
+            // by convention (UI clearly shows "encrypted" instead of values).
+            side: 'ask' as Side,
+            priceUsdc: 0,
+            sizeBtc: 0,
+            expirySlots: 0,
+            status: mergeStatus('sealed', r.status),
+            createdAt: 0,
+            encrypted: true,
+          }));
+          return {
+            yourOrders: [...placeholders, ...merged].slice(0, 50),
+          };
+        }),
     }),
     {
       name: 'obsidian:orders:v1',

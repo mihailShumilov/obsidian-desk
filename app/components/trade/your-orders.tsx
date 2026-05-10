@@ -98,34 +98,51 @@ function Row({
   onCancel: () => void;
 }): JSX.Element {
   const style = STATUS_STYLE[order.status];
-  const cancellable = order.status === 'sealed';
+  // Encrypted placeholders (hydrated from chain without local plaintext)
+  // can't be locally cancelled; on-chain cancel ix lands in a follow-up.
+  const cancellable = order.status === 'sealed' && !order.encrypted;
+  const encryptedTip = 'On-chain order without local plaintext — submitted from another device or after a localStorage clear.';
   return (
     <tr className="hover:bg-obsidian-800/40">
       <td className="px-5 py-3 font-mono text-xs">{order.id.slice(0, 8)}…</td>
       <td className="px-5 py-3">
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 text-xs font-medium',
-            order.side === 'bid' ? 'text-cipher-cyan' : 'text-bitcoin-ember',
-          )}
-        >
+        {order.encrypted ? (
+          <span className="text-xs text-muted" title={encryptedTip}>
+            encrypted
+          </span>
+        ) : (
           <span
             className={cn(
-              'h-3 w-1 rounded-sm',
-              order.side === 'bid' ? 'bg-cipher-cyan' : 'bg-bitcoin-ember',
+              'inline-flex items-center gap-1.5 text-xs font-medium',
+              order.side === 'bid' ? 'text-cipher-cyan' : 'text-bitcoin-ember',
             )}
-          />
-          {order.side === 'bid' ? 'Bid' : 'Ask'}
-        </span>
+          >
+            <span
+              className={cn(
+                'h-3 w-1 rounded-sm',
+                order.side === 'bid' ? 'bg-cipher-cyan' : 'bg-bitcoin-ember',
+              )}
+            />
+            {order.side === 'bid' ? 'Bid' : 'Ask'}
+          </span>
+        )}
       </td>
       <td className="px-5 py-3 text-right font-mono">
-        {order.priceUsdc.toLocaleString(undefined, {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}
+        {order.encrypted ? (
+          <span className="text-muted" title={encryptedTip}>—</span>
+        ) : (
+          order.priceUsdc.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })
+        )}
       </td>
       <td className="px-5 py-3 text-right font-mono">
-        {order.sizeBtc.toFixed(3)}
+        {order.encrypted ? (
+          <span className="text-muted" title={encryptedTip}>—</span>
+        ) : (
+          order.sizeBtc.toFixed(3)
+        )}
       </td>
       <td className="px-5 py-3">
         <span

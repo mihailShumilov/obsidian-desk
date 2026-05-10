@@ -12,11 +12,18 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Connection, Keypair, PublicKey } from '@solana/web3.js';
+import { AnchorProvider, Program, type Idl } from '@coral-xyz/anchor';
 import {
   DEFAULT_OBSIDIAN_PROGRAM_ID,
   assertNotMockOnMainnet,
 } from '@obsidian-desk/sdk';
 import * as encryptSdk from '@obsidian-desk/sdk/encrypt';
+
+const RPC =
+  process.env['SOLANA_RPC'] ??
+  process.env['NEXT_PUBLIC_SOLANA_RPC'] ??
+  'https://api.devnet.solana.com';
 
 assertNotMockOnMainnet({
   encryptMode: process.env['OBSIDIAN_ENCRYPT_MODE'],
@@ -133,4 +140,95 @@ export async function getProgramSetupAction(): Promise<ProgramSetup> {
     marketPubkey: MARKET_PUBKEY,
     idl: loadIdl(),
   };
+}
+
+/**
+ * On-chain row for a user's EncryptedOrder PDA. The plaintext `price` and
+ * `size` aren't decryptable from this side — the wallet that submitted the
+ * order is the only place that holds the plaintext (in localStorage). The
+ * frontend cross-references by `nonceHex`: if the local order tape has the
+ * same nonce, it merges the on-chain status onto it; if not, it renders an
+ * "encrypted" placeholder row so the user knows orders exist on-chain even
+ * after a localStorage wipe.
+ */
+export interface OnChainOrderRow {
+  pda: string;
+  nonceHex: string;
+  market: string;
+  expirySlot: string;
+  status: 'active' | 'matched' | 'cancelled' | 'expired';
+}
+
+const SOLANA_BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/**
+ * Read every EncryptedOrder PDA owned by `walletPubkey`. Filtered server-side
+ * via memcmp on the `owner` field at offset 8 (discriminator) + 32 (market) =
+ * 40. Returns [] when the IDL is missing (laptop without `anchor build`
+ * artefacts) or the RPC fails — the caller renders an empty hydration.
+ */
+export async function listMyEncryptedOrdersAction(
+  walletPubkey: string,
+): Promise<OnChainOrderRow[]> {
+  if (!SOLANA_BASE58_RE.test(walletPubkey)) {
+    throw new Error('listMyEncryptedOrdersAction: invalid walletPubkey');
+  }
+  const idl = loadIdl();
+  if (!idl) return [];
+
+  try {
+    const conn = new Connection(RPC, 'confirmed');
+    const dummyKeypair = Keypair.generate();
+    const dummyWallet = {
+      publicKey: dummyKeypair.publicKey,
+      signTransaction: async <T>(tx: T): Promise<T> => tx,
+      signAllTransactions: async <T>(txs: T[]): Promise<T[]> => txs,
+      payer: dummyKeypair,
+    };
+    const provider = new AnchorProvider(conn, dummyWallet as never, {
+      commitment: 'confirmed',
+    });
+    const program = new Program(idl as Idl, provider);
+
+    const accountClient = (program.account as Record<string, {
+      all(filters: unknown[]): Promise<unknown>;
+    }>)['encryptedOrder'];
+    if (!accountClient) return [];
+
+    const records = (await accountClient.all([
+      { memcmp: { offset: 40, bytes: walletPubkey } },
+    ])) as Array<{
+      publicKey: PublicKey;
+      account: {
+        market: PublicKey;
+        owner: PublicKey;
+        nonce: number[] | Buffer | Uint8Array;
+        expirySlot: { toString(): string };
+        status: Record<string, unknown>;
+      };
+    }>;
+
+    return records.map(({ publicKey, account }) => {
+      const status: OnChainOrderRow['status'] =
+        'active' in account.status ? 'active'
+        : 'matched' in account.status ? 'matched'
+        : 'cancelled' in account.status ? 'cancelled'
+        : 'expired';
+      const nonceBuf = Buffer.isBuffer(account.nonce)
+        ? account.nonce
+        : Buffer.from(account.nonce);
+      return {
+        pda: publicKey.toBase58(),
+        nonceHex: nonceBuf.toString('hex'),
+        market: account.market.toBase58(),
+        expirySlot: account.expirySlot.toString(),
+        status,
+      };
+    });
+  } catch (err) {
+    console.warn(
+      `[trade] listMyEncryptedOrdersAction failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return [];
+  }
 }

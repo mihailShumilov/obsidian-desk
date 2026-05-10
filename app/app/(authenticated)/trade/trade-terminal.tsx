@@ -37,6 +37,7 @@ import { formatBtc } from '@/lib/format';
 import {
   prepareEncryptedOrderAction,
   getProgramSetupAction,
+  listMyEncryptedOrdersAction,
   type ProgramSetup,
 } from './actions';
 import {
@@ -115,6 +116,33 @@ export function TradeTerminal(): JSX.Element {
   const yourOrders = useOrderStore((s) => s.yourOrders);
   const pushOrder = useOrderStore((s) => s.pushOrder);
   const setStatus = useOrderStore((s) => s.setStatus);
+  const hydrateFromChain = useOrderStore((s) => s.hydrateFromChain);
+
+  // On-chain hydration: read the user's EncryptedOrder PDAs every time the
+  // wallet changes (or on mount), then merge into the local tape so a
+  // refresh — or a fresh device — still surfaces the on-chain order set.
+  // Re-runs every 20s while the wallet stays connected so settlements
+  // landing in another tab eventually reflect here.
+  useEffect(() => {
+    const pk = wallet.publicKey;
+    if (!pk) return;
+    const wallet58 = pk.toBase58();
+    let cancelled = false;
+    async function tick(): Promise<void> {
+      try {
+        const rows = await listMyEncryptedOrdersAction(wallet58);
+        if (!cancelled) hydrateFromChain(rows);
+      } catch {
+        // best-effort — local tape stays as-is on transient failures
+      }
+    }
+    void tick();
+    const id = setInterval(() => void tick(), 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [wallet.publicKey, hydrateFromChain]);
 
   const [toast, setToast] = useState<string | null>(null);
   const [match, setMatch] = useState<MatchInfo | null>(null);

@@ -9,6 +9,7 @@
 
 import { Card } from '@/components/ui/card';
 import { Cipher } from '@/components/obsidian/cipher';
+import { OpenOrders } from '@/components/positions/open-orders';
 import { listMatches, type PositionRow } from './actions';
 
 export const metadata = { title: 'Positions · ObsidianDesk' };
@@ -66,6 +67,14 @@ export default async function PositionsPage(): Promise<JSX.Element> {
         relay (<span className="text-cipher-cyan">real ✓</span>), fell back
         to mock when a network blipped (<span className="text-bitcoin-ember">fallback ⚠</span>),
         or was forced mock by env (<span className="text-muted">mock</span>).
+      </p>
+
+      <OpenOrders />
+
+      <h2 className="mt-8 text-lg font-semibold tracking-tightest">Settled Matches</h2>
+      <p className="mt-1 text-xs text-muted">
+        Records below appear only after two crossing orders meet and the keeper
+        finalises a <code className="text-foreground">MatchRecord</code> PDA.
       </p>
 
       {loadError ? (
