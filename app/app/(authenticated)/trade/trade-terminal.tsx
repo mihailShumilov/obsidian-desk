@@ -90,17 +90,27 @@ function anonAddr(): string {
 }
 
 /**
- * Convert an Ika dWallet hex id (32 bytes hex-encoded) to a Solana
- * `PublicKey`. The dWallet store holds these as hex; the on-chain
- * `submit_order` ix expects the 32-byte raw form wrapped in a Pubkey.
+ * Convert an Ika dWallet hex id to a Solana `PublicKey` (32 bytes).
+ *
+ * Mock-mode createDWallet mints a 32-byte random id (64 hex chars).
+ * Real-mode createDWallet returns the secp256k1 compressed public key
+ * (33 bytes / 66 hex chars) — the leading byte is the 0x02/0x03 parity
+ * flag; the remaining 32 bytes are the X coordinate, which is the
+ * unique identifier the program stores. Drop the compression byte for
+ * the on-chain Pubkey field. The keeper's lookup in the SDK store keys
+ * by the full hex string (preserved unchanged in the dwallet store), so
+ * the on-chain truncation only matters for the Pubkey-shaped field on
+ * EncryptedOrder; settlement-side lookups still work.
  */
 function dwalletHexToPubkey(hex: string): PublicKey {
-  if (hex.length !== 64) {
-    throw new Error(`dwallet id: expected 64 hex chars, got ${hex.length}`);
+  let h = hex;
+  if (h.length === 66) h = h.slice(2);
+  if (h.length !== 64) {
+    throw new Error(`dwallet id: expected 64 or 66 hex chars, got ${hex.length}`);
   }
   const bytes = new Uint8Array(32);
   for (let i = 0; i < 32; i++) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   }
   return new PublicKey(bytes);
 }
@@ -207,7 +217,9 @@ export function TradeTerminal(): JSX.Element {
    * throw inside the hex parser.
    */
   const dwalletIdValid =
-    !!dwallet && dwallet.id.length === 64 && /^[0-9a-fA-F]+$/.test(dwallet.id);
+    !!dwallet &&
+    (dwallet.id.length === 64 || dwallet.id.length === 66) &&
+    /^[0-9a-fA-F]+$/.test(dwallet.id);
   const onChainReady =
     !!anchorWallet &&
     dwalletIdValid &&

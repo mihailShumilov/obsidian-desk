@@ -23,6 +23,7 @@ import { StepShell } from '@/components/deposit/step-shell';
 import { KeyShards } from '@/components/deposit/key-shards';
 import { CopyButton } from '@/components/deposit/copy-button';
 import { useDwalletStore, type WizardMode } from '@/stores/dwallet';
+import { useOrderStore } from '@/lib/order-state';
 import { formatBtc, formatNextBlockEta, truncateAddress } from '@/lib/format';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
 import {
@@ -49,7 +50,16 @@ export function DepositWizard(): JSX.Element {
   const setDwallet = useDwalletStore((s) => s.setDwallet);
   const setPolicy = useDwalletStore((s) => s.setPolicy);
   const setStep = useDwalletStore((s) => s.setStep);
-  const reset = useDwalletStore((s) => s.reset);
+  const resetDwallet = useDwalletStore((s) => s.reset);
+  const resetOrders = useOrderStore((s) => s.reset);
+  // Resetting the dWallet unbinds the user from every prior order — those
+  // orders were submitted under a different dWallet identity, so showing
+  // them under the new one (or counting their notional in the Balances
+  // panel) would be misleading. Clear both stores together.
+  const reset = (): void => {
+    resetOrders();
+    resetDwallet();
+  };
 
   // Persisted store is hydrated client-side only — until then, render a
   // skeleton so SSR/CSR markup matches.

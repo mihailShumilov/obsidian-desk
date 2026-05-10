@@ -58,6 +58,10 @@ interface OrderState {
    *    status (without clobbering local-only refinements like 'settling').
    *  - If no local entry exists, insert an `encrypted: true` placeholder. */
   hydrateFromChain(rows: OnChainOrderHydration[]): void;
+  /** Wipe the local tape — used when the dWallet is reset, since the
+   *  prior orders are tied to that wallet's identity and continuing to
+   *  display them under a fresh dWallet is misleading. */
+  reset(): void;
 }
 
 function mergeStatus(local: Status, chain: OnChainOrderHydration['status']): Status {
@@ -87,6 +91,7 @@ export const useOrderStore = create<OrderState>()(
             o.id === id ? { ...o, status } : o,
           ),
         })),
+      reset: () => set({ yourOrders: [] }),
       hydrateFromChain: (rows) =>
         set((s) => {
           const byNonce = new Map(rows.map((r) => [r.nonceHex.toLowerCase(), r]));
