@@ -1,12 +1,15 @@
 /**
  * Local order state for /trade.
  *
- * P7 keeps "your orders" and the synthetic "encrypted book" in process
- * memory (zustand). Real Anchor reads land in P9 alongside the keeper
- * polling and the WS log subscriptions.
+ * Persisted to localStorage so a refresh on /trade preserves the user's
+ * sealed/settled tape. The full on-chain hydration (read EncryptedOrder
+ * PDAs owned by the connected wallet) is a follow-up — until then the
+ * local tape is the only place where "you submitted these orders" lives,
+ * so wiping it on refresh just looked broken.
  */
 
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 import type { Side } from '@obsidian-desk/sdk';
 
@@ -40,23 +43,32 @@ interface OrderState {
   setStatus(id: string, status: Status): void;
 }
 
-export const useOrderStore = create<OrderState>((set) => ({
-  yourOrders: [],
-  pushOrder: (o) =>
-    set((s) => ({ yourOrders: [o, ...s.yourOrders].slice(0, 50) })),
-  cancelOrder: (id) =>
-    set((s) => ({
-      yourOrders: s.yourOrders.map((o) =>
-        o.id === id ? { ...o, status: 'cancelled' } : o,
-      ),
-    })),
-  setStatus: (id, status) =>
-    set((s) => ({
-      yourOrders: s.yourOrders.map((o) =>
-        o.id === id ? { ...o, status } : o,
-      ),
-    })),
-}));
+export const useOrderStore = create<OrderState>()(
+  persist(
+    (set) => ({
+      yourOrders: [],
+      pushOrder: (o) =>
+        set((s) => ({ yourOrders: [o, ...s.yourOrders].slice(0, 50) })),
+      cancelOrder: (id) =>
+        set((s) => ({
+          yourOrders: s.yourOrders.map((o) =>
+            o.id === id ? { ...o, status: 'cancelled' } : o,
+          ),
+        })),
+      setStatus: (id, status) =>
+        set((s) => ({
+          yourOrders: s.yourOrders.map((o) =>
+            o.id === id ? { ...o, status } : o,
+          ),
+        })),
+    }),
+    {
+      name: 'obsidian:orders:v1',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ yourOrders: state.yourOrders }),
+    },
+  ),
+);
 
 /** Compose the 14-row encrypted book from your-active-orders + filler. */
 export function bookView(yourOrders: YourOrder[]): BookRow[] {
