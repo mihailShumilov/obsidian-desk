@@ -3,6 +3,7 @@ import { Geist, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import { Header } from '@/components/shell/header';
 import { Footer } from '@/components/shell/footer';
+import { Providers } from '@/components/providers';
 
 // Loaded per UI_DESIGN.md §12 — variable fonts published as CSS vars
 // (--font-geist, --font-mono) and consumed by tailwind.config.ts
@@ -33,11 +34,13 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${mono.variable}`}>
       <body className="min-h-screen bg-obsidian-950 font-sans text-foreground antialiased">
-        <div className="flex min-h-screen flex-col">
-          <Header />
-          <div className="flex-1">{children}</div>
-          <Footer />
-        </div>
+        <Providers>
+          <div className="flex min-h-screen flex-col">
+            <Header />
+            <div className="flex-1">{children}</div>
+            <Footer />
+          </div>
+        </Providers>
       </body>
     </html>
   );
