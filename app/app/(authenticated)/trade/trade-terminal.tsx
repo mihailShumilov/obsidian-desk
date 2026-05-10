@@ -26,12 +26,14 @@ import {
 } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import type { Idl } from '@coral-xyz/anchor';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ChainBadge } from '@/components/obsidian/chain-badge';
 import { OrderbookVoid } from '@/components/obsidian/orderbook-void';
 import { OrderForm, type OrderFormSubmit } from '@/components/trade/order-form';
 import { useDwalletStore } from '@/stores/dwallet';
+import { formatBtc } from '@/lib/format';
 import {
   prepareEncryptedOrderAction,
   getProgramSetupAction,
@@ -107,6 +109,9 @@ export function TradeTerminal(): JSX.Element {
   const anchorWallet = useAnchorWallet();
   const { connection } = useConnection();
   const dwallet = useDwalletStore((s) => s.dwallet);
+  const balanceSats = useDwalletStore((s) => s.balanceSats);
+  const totalSats = useDwalletStore((s) => s.totalSats);
+  const policyLocked = useDwalletStore((s) => s.policyLocked);
   const yourOrders = useOrderStore((s) => s.yourOrders);
   const pushOrder = useOrderStore((s) => s.pushOrder);
   const setStatus = useOrderStore((s) => s.setStatus);
@@ -147,6 +152,20 @@ export function TradeTerminal(): JSX.Element {
     [yourOrders],
   );
   const book = useMemo(() => bookView(yourOrders), [yourOrders]);
+
+  // Net realized USDC notional from settled orders. Asks add (received
+  // USDC for BTC sold), bids subtract (spent USDC on BTC bought). The
+  // USDC leg is notional-only in the current scaffold — `finalize_settlement`
+  // doesn't move SPL tokens — so this is a P&L tape, not a custody balance.
+  const realizedUsdc = useMemo(() => {
+    let net = 0;
+    for (const o of yourOrders) {
+      if (o.status !== 'settled') continue;
+      const notional = o.priceUsdc * o.sizeBtc;
+      net += o.side === 'ask' ? notional : -notional;
+    }
+    return net;
+  }, [yourOrders]);
 
   /**
    * Are all the prerequisites in place for an on-chain submission? When
@@ -357,23 +376,14 @@ export function TradeTerminal(): JSX.Element {
             disabledReason={canSubmit ? undefined : 'Connect wallet'}
           />
 
-          <div className="mt-6 border-t border-obsidian-700 pt-4">
-            <p className="mb-2 text-xs uppercase tracking-widest text-muted">
-              Your dWallet
-            </p>
-            {canSubmit ? (
-              <div className="flex items-center justify-between text-sm">
-                <ChainBadge chain="bitcoin" />
-                <span className="font-mono text-xs text-muted">
-                  Lock one in /deposit
-                </span>
-              </div>
-            ) : (
-              <p className="text-xs text-muted">
-                Create your dWallet to trade.
-              </p>
-            )}
-          </div>
+          <BalancesPanel
+            connected={canSubmit}
+            dwalletExists={!!dwallet}
+            policyLocked={policyLocked}
+            balanceSats={BigInt(balanceSats)}
+            totalSats={BigInt(totalSats)}
+            realizedUsdc={realizedUsdc}
+          />
         </Card>
       </div>
 
@@ -400,6 +410,123 @@ export function TradeTerminal(): JSX.Element {
         />
       )}
     </main>
+  );
+}
+
+/**
+ * Balances panel on the right rail — shows the dWallet's BTC (real, polled
+ * via esplora through the deposit-store hook) and a USDC realized-notional
+ * line summed from the local settled-order tape.
+ *
+ * The USDC value is honest about its nature: `finalize_settlement` records
+ * a `clearing_price` but doesn't move SPL tokens (see docs/gaps.md), so
+ * what we render here is a **notional P&L tape**, not a custody balance.
+ * The tooltip / sub-line make that distinction explicit.
+ */
+function BalancesPanel({
+  connected,
+  dwalletExists,
+  policyLocked,
+  balanceSats,
+  totalSats,
+  realizedUsdc,
+}: {
+  connected: boolean;
+  dwalletExists: boolean;
+  policyLocked: boolean;
+  balanceSats: bigint;
+  totalSats: bigint;
+  realizedUsdc: number;
+}): JSX.Element {
+  const pendingSats = totalSats > balanceSats ? totalSats - balanceSats : 0n;
+
+  return (
+    <div className="mt-6 border-t border-obsidian-700 pt-4">
+      <p className="mb-3 text-xs uppercase tracking-widest text-muted">
+        Balances
+      </p>
+      {!connected ? (
+        <p className="text-xs text-muted">Create your dWallet to trade.</p>
+      ) : !dwalletExists ? (
+        <div className="flex items-center justify-between text-sm">
+          <ChainBadge chain="bitcoin" />
+          <Link
+            href="/deposit"
+            className="font-mono text-xs text-cipher-cyan-dim underline hover:text-cipher-cyan"
+          >
+            Lock one in /deposit
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-2.5 text-sm">
+          <div className="flex items-baseline justify-between gap-2">
+            <ChainBadge chain="bitcoin" />
+            <span className="text-right font-mono">
+              <span className="text-foreground">{formatBtc(balanceSats)}</span>
+              <span className="ml-1 text-xs text-muted">BTC</span>
+              {pendingSats > 0n && (
+                <span className="ml-2 text-[10px] text-bitcoin-ember">
+                  +{formatBtc(pendingSats)} pending
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span
+              className="text-xs text-muted"
+              title={
+                'Notional P&L from your settled orders.\n' +
+                'finalize_settlement records the clearing price but does not\n' +
+                'move SPL tokens in this scaffold — see /positions for the\n' +
+                'on-chain breakdown.'
+              }
+            >
+              USDC realized
+            </span>
+            <span className="text-right font-mono">
+              <span
+                className={
+                  realizedUsdc > 0
+                    ? 'text-cipher-cyan'
+                    : realizedUsdc < 0
+                      ? 'text-bitcoin-ember'
+                      : 'text-foreground'
+                }
+              >
+                {realizedUsdc >= 0 ? '' : '−'}
+                {Math.abs(realizedUsdc).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
+              <span className="ml-1 text-xs text-muted">USDC</span>
+            </span>
+          </div>
+          <p className="text-[10px] text-muted">
+            {policyLocked ? 'Policy locked' : 'Policy unlocked — '}
+            {!policyLocked && (
+              <Link
+                href="/deposit"
+                className="text-cipher-cyan-dim underline hover:text-cipher-cyan"
+              >
+                lock in /deposit
+              </Link>
+            )}
+            {policyLocked && (
+              <>
+                {' · '}
+                <Link
+                  href="/positions"
+                  className="text-cipher-cyan-dim underline hover:text-cipher-cyan"
+                >
+                  view fills
+                </Link>
+              </>
+            )}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
