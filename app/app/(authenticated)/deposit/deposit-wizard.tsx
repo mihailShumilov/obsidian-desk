@@ -208,13 +208,18 @@ function FundStep({
 }): JSX.Element {
   const hasFunds = totalSats > 0n;
   const pending = totalSats > balanceSats;
+  const summary = hasFunds
+    ? pending
+      ? `${formatBtc(balanceSats)} BTC · +${formatBtc(totalSats - balanceSats)} pending`
+      : `${formatBtc(balanceSats)} BTC`
+    : undefined;
 
   return (
     <StepShell
       index={2}
       title="Fund with BTC"
       state={state}
-      summary={hasFunds ? `${formatBtc(balanceSats)} BTC` : undefined}
+      summary={summary}
     >
       {address && (
         <div className="grid gap-6 md:grid-cols-[1fr_auto]">
