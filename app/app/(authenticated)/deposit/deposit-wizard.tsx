@@ -66,6 +66,7 @@ export function DepositWizard(): JSX.Element {
       dwallet={dwallet}
       policyAccount={policyAccount}
       balanceSats={BigInt(balanceSats)}
+      totalSats={BigInt(totalSats)}
       onReset={reset}
     />;
   }
@@ -371,13 +372,16 @@ function DoneState({
   dwallet,
   policyAccount,
   balanceSats,
+  totalSats,
   onReset,
 }: {
   dwallet: { address: string };
   policyAccount: string | null;
   balanceSats: bigint;
+  totalSats: bigint;
   onReset: () => void;
 }): JSX.Element {
+  const pending = totalSats > balanceSats ? totalSats - balanceSats : 0n;
   const router = useRouter();
   return (
     <div className="space-y-6">
@@ -409,6 +413,14 @@ function DoneState({
             {formatBtc(balanceSats)} BTC
           </span>
         </div>
+        {pending > 0n && (
+          <div className="flex items-baseline justify-between text-xs">
+            <span className="text-muted">Pending (mempool)</span>
+            <span className="font-mono text-bitcoin-ember">
+              +{formatBtc(pending)} BTC
+            </span>
+          </div>
+        )}
         {policyAccount && (
           <div className="flex items-baseline justify-between text-xs">
             <span className="text-muted">Policy account</span>
