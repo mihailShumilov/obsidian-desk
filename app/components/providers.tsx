@@ -16,20 +16,20 @@ import {
   WalletProvider,
 } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-// Imported from the per-wallet package (not the umbrella
-// `@solana/wallet-adapter-wallets`) — the umbrella drags in Ledger
-// hardware wallet deps which need libusb / node-gyp / python at install
-// time, and doubles the production node_modules tree. We can add other
-// adapters one-by-one if needed.
-import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { useDwalletPoller } from '@/stores/dwallet';
 
 const RPC_ENDPOINT =
   process.env['NEXT_PUBLIC_SOLANA_RPC'] ?? 'http://127.0.0.1:18899';
 
+// Phantom (and most modern Solana wallets) auto-register via the Wallet
+// Standard, so passing them explicitly here is redundant — `WalletProvider`
+// dedupes against the Standard registration and logs a noisy warning per
+// render. Leaving the list empty lets the modal pick up Phantom (and any
+// other Standard-compliant wallet) on its own.
+const WALLETS: never[] = [];
+
 export function Providers({ children }: { children: ReactNode }): JSX.Element {
-  const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
   const queryClient = useMemo(
     () =>
       new QueryClient({
@@ -43,7 +43,7 @@ export function Providers({ children }: { children: ReactNode }): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <ConnectionProvider endpoint={RPC_ENDPOINT}>
-        <WalletProvider wallets={wallets} autoConnect={false}>
+        <WalletProvider wallets={WALLETS} autoConnect>
           <WalletModalProvider>
             <DwalletPollerHost />
             {children}
