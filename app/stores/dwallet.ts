@@ -81,18 +81,23 @@ export const useDwalletStore = create<DwalletState>()(
     {
       name: 'obsidian:dwallet:v1',
       storage: createJSONStorage(() => localStorage),
-      // Persist only the wizard cursor + non-sensitive display values.
-      // `dwallet.id` is currently the auth token in mock mode (any caller
-      // who knows it can lockPolicyAction another user's dWallet), so
-      // keeping it in memory only limits XSS / extension exfil risk.
-      // A refresh wipes the in-memory dWallet — the wizard's reset UX
-      // walks the user through re-creation.
+      // Persist the wizard cursor + display values + the dWallet's PUBLIC
+      // identifiers (address + chain). `dwallet.id` is intentionally
+      // omitted — it's the auth token for `lockPolicyAction` in mock mode,
+      // so keeping it in memory only limits XSS / extension exfil risk.
+      // After a refresh the wizard re-renders with `id: ''`, which is fine
+      // for DoneState rendering and the esplora poll. Any flow that needs
+      // the real id (re-locking, server-side mutate) will fail-closed at
+      // the action boundary, prompting the user through reset → re-create.
       partialize: (state) => ({
         balanceSats: state.balanceSats,
         totalSats: state.totalSats,
         policyLocked: state.policyLocked,
         policyAccount: state.policyAccount,
         step: state.step,
+        dwallet: state.dwallet
+          ? { id: '', address: state.dwallet.address, chain: state.dwallet.chain }
+          : null,
       }),
     },
   ),
