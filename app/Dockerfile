@@ -37,6 +37,21 @@ ARG PNPM_VERSION
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 WORKDIR /repo
 
+# Next.js inlines `NEXT_PUBLIC_*` env vars into the client bundle at
+# **build** time — values supplied at runtime via docker compose env are
+# ignored. CI passes the production values via --build-arg so the
+# compiled bundle points at devnet RPC, the deployed program, etc.
+# Local builds without these args fall back to the defaults declared at
+# the use sites (e.g. `app/components/providers.tsx`).
+ARG NEXT_PUBLIC_SOLANA_RPC
+ARG NEXT_PUBLIC_NETWORK
+ARG NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID
+ARG NEXT_PUBLIC_OBSIDIAN_MARKET
+ENV NEXT_PUBLIC_SOLANA_RPC=$NEXT_PUBLIC_SOLANA_RPC \
+    NEXT_PUBLIC_NETWORK=$NEXT_PUBLIC_NETWORK \
+    NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID=$NEXT_PUBLIC_OBSIDIAN_PROGRAM_ID \
+    NEXT_PUBLIC_OBSIDIAN_MARKET=$NEXT_PUBLIC_OBSIDIAN_MARKET
+
 COPY --from=deps /repo/node_modules         ./node_modules
 COPY --from=deps /repo/app/node_modules     ./app/node_modules
 COPY --from=deps /repo/sdk/node_modules     ./sdk/node_modules
