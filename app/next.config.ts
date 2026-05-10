@@ -23,6 +23,18 @@ const nextConfig: NextConfig = {
     '@protobuf-ts/runtime-rpc',
     '@bufbuild/protobuf',
   ],
+  // tiny-secp256k1@2.x loads its WASM blob at module-eval via
+  // `fs.readFileSync(__dirname + '/secp256k1.wasm')`. Next's tracer doesn't
+  // pick up referenced asset files, so the standalone bundle ships without
+  // the .wasm and any server action that pulls bitcoinjs-lib (deposit,
+  // trade, positions) crashes with ENOENT. Pattern is resolved from the
+  // project root (`app/`); the file lives in the pnpm store at the
+  // workspace root, hence the `..` prefix.
+  outputFileTracingIncludes: {
+    '/*': [
+      '../node_modules/.pnpm/tiny-secp256k1@*/node_modules/tiny-secp256k1/lib/*.wasm',
+    ],
+  },
 };
 
 export default nextConfig;
