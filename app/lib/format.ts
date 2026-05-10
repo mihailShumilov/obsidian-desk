@@ -17,3 +17,21 @@ export function formatBtc(sats: bigint): string {
   const fracStr = frac.toString().padStart(8, '0').replace(/0+$/, '');
   return fracStr.length > 0 ? `${whole}.${fracStr}` : `${whole}`;
 }
+
+/**
+ * ETA for the next signet block given the latest block's UNIX seconds.
+ * Signet's design target is 10-minute blocks, but inter-block gaps are
+ * bursty in practice — return "any moment" once the design target has
+ * elapsed rather than counting up forever.
+ */
+export function formatNextBlockEta(
+  tipTimestampSeconds: number,
+  nowMs: number = Date.now(),
+): string {
+  const TARGET_BLOCK_INTERVAL_S = 600;
+  const elapsedS = Math.floor(nowMs / 1000) - tipTimestampSeconds;
+  const remainingS = TARGET_BLOCK_INTERVAL_S - elapsedS;
+  if (remainingS <= 0) return 'any moment';
+  if (remainingS < 60) return `~${remainingS}s`;
+  return `~${Math.ceil(remainingS / 60)}m`;
+}

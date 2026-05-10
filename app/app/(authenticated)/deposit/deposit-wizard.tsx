@@ -23,7 +23,7 @@ import { StepShell } from '@/components/deposit/step-shell';
 import { KeyShards } from '@/components/deposit/key-shards';
 import { CopyButton } from '@/components/deposit/copy-button';
 import { useDwalletStore, type WizardMode } from '@/stores/dwallet';
-import { formatBtc, truncateAddress } from '@/lib/format';
+import { formatBtc, formatNextBlockEta, truncateAddress } from '@/lib/format';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
 import {
   createDWalletAction,
@@ -42,6 +42,7 @@ export function DepositWizard(): JSX.Element {
   const dwallet = useDwalletStore((s) => s.dwallet);
   const balanceSats = useDwalletStore((s) => s.balanceSats);
   const totalSats = useDwalletStore((s) => s.totalSats);
+  const tipTimestamp = useDwalletStore((s) => s.tipTimestamp);
   const policyLocked = useDwalletStore((s) => s.policyLocked);
   const policyAccount = useDwalletStore((s) => s.policyAccount);
   const step = useDwalletStore((s) => s.step);
@@ -67,6 +68,7 @@ export function DepositWizard(): JSX.Element {
       policyAccount={policyAccount}
       balanceSats={BigInt(balanceSats)}
       totalSats={BigInt(totalSats)}
+      tipTimestamp={tipTimestamp}
       onReset={reset}
     />;
   }
@@ -95,6 +97,7 @@ export function DepositWizard(): JSX.Element {
           address={dwallet?.address ?? null}
           balanceSats={BigInt(balanceSats)}
           totalSats={BigInt(totalSats)}
+          tipTimestamp={tipTimestamp}
           onProceed={() => setStep('lock')}
           onBack={() => setStep('create')}
         />
@@ -110,6 +113,18 @@ export function DepositWizard(): JSX.Element {
       </div>
     </div>
   );
+}
+
+/**
+ * Forces a re-render every `intervalMs` so derived values (like a block
+ * ETA computed from `Date.now()`) tick smoothly between data fetches.
+ */
+function useTick(intervalMs: number): void {
+  const [, setN] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setN((n) => n + 1), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
 }
 
 /* ────────────────────────────── steps ────────────────────────────── */
@@ -196,6 +211,7 @@ function FundStep({
   address,
   balanceSats,
   totalSats,
+  tipTimestamp,
   onProceed,
   onBack,
 }: {
@@ -203,14 +219,18 @@ function FundStep({
   address: string | null;
   balanceSats: bigint;
   totalSats: bigint;
+  tipTimestamp: number | null;
   onProceed: () => void;
   onBack: () => void;
 }): JSX.Element {
+  // Re-render every 30s so the ETA ticks down between 15s balance polls.
+  useTick(30_000);
   const hasFunds = totalSats > 0n;
   const pending = totalSats > balanceSats;
+  const eta = pending && tipTimestamp ? formatNextBlockEta(tipTimestamp) : null;
   const summary = hasFunds
     ? pending
-      ? `${formatBtc(balanceSats)} BTC · +${formatBtc(totalSats - balanceSats)} pending`
+      ? `${formatBtc(balanceSats)} BTC · +${formatBtc(totalSats - balanceSats)} pending${eta ? ` · next block ${eta}` : ''}`
       : `${formatBtc(balanceSats)} BTC`
     : undefined;
 
@@ -254,9 +274,16 @@ function FundStep({
                 </p>
               </div>
               {pending && (
-                <span className="rounded-md bg-match-gold/15 px-2 py-0.5 text-xs text-match-gold animate-pulse-cipher">
-                  +{formatBtc(totalSats - balanceSats)} pending
-                </span>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="rounded-md bg-match-gold/15 px-2 py-0.5 text-xs text-match-gold animate-pulse-cipher">
+                    +{formatBtc(totalSats - balanceSats)} pending
+                  </span>
+                  {eta && (
+                    <span className="font-mono text-[10px] text-muted">
+                      next block {eta}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
             <p className="text-xs text-muted">
@@ -378,15 +405,20 @@ function DoneState({
   policyAccount,
   balanceSats,
   totalSats,
+  tipTimestamp,
   onReset,
 }: {
   dwallet: { address: string };
   policyAccount: string | null;
   balanceSats: bigint;
   totalSats: bigint;
+  tipTimestamp: number | null;
   onReset: () => void;
 }): JSX.Element {
+  // Tick once per 30s so the next-block ETA refreshes between polls.
+  useTick(30_000);
   const pending = totalSats > balanceSats ? totalSats - balanceSats : 0n;
+  const eta = pending > 0n && tipTimestamp ? formatNextBlockEta(tipTimestamp) : null;
   const router = useRouter();
   return (
     <div className="space-y-6">
@@ -421,8 +453,15 @@ function DoneState({
         {pending > 0n && (
           <div className="flex items-baseline justify-between text-xs">
             <span className="text-muted">Pending (mempool)</span>
-            <span className="font-mono text-bitcoin-ember">
-              +{formatBtc(pending)} BTC
+            <span className="flex items-baseline gap-2">
+              <span className="font-mono text-bitcoin-ember">
+                +{formatBtc(pending)} BTC
+              </span>
+              {eta && (
+                <span className="font-mono text-[10px] text-muted">
+                  next block {eta}
+                </span>
+              )}
             </span>
           </div>
         )}

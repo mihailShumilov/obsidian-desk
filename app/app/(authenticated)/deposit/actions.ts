@@ -107,6 +107,10 @@ export interface AddressBalance {
   unconfirmedSats: string;
   /** Combined (confirmed + unconfirmed). */
   totalSats: string;
+  /** UNIX seconds of the latest signet block. Used by the UI to compute
+   *  a "next block in ~Xm" ETA next to pending balances. Undefined when
+   *  the tip lookup failed (caller renders without ETA). */
+  tipTimestamp?: number;
 }
 
 interface EsploraStats {
@@ -137,20 +141,24 @@ const ZERO_BALANCE: AddressBalance = {
  * rather than crashing the page. The fetch uses Next's revalidate cache
  * keyed on URL so concurrent tabs viewing the same dWallet share one
  * upstream call (TTL 10s, shorter than the client's 15s poll).
+ *
+ * Also fetches the chain tip timestamp (best-effort, no failure path) so
+ * the UI can render an ETA next to pending balances.
  */
 export async function getAddressBalanceAction(
   address: string,
 ): Promise<AddressBalance> {
   if (!SIGNET_BECH32_RE.test(address)) return ZERO_BALANCE;
   try {
-    const res = await fetch(`${ESPLORA_URL}/address/${encodeURIComponent(address)}`, {
-      next: { revalidate: 10, tags: [`esplora:${address}`] },
-      // Esplora can be slow; cap the wait so a hung request doesn't hang
-      // the wizard's 15s polling loop.
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!res.ok) return ZERO_BALANCE;
-    const json = (await res.json()) as EsploraAddress;
+    const [balanceRes, tipTs] = await Promise.all([
+      fetch(`${ESPLORA_URL}/address/${encodeURIComponent(address)}`, {
+        next: { revalidate: 10, tags: [`esplora:${address}`] },
+        signal: AbortSignal.timeout(8_000),
+      }),
+      fetchSignetTipTimestamp(),
+    ]);
+    if (!balanceRes.ok) return { ...ZERO_BALANCE, tipTimestamp: tipTs };
+    const json = (await balanceRes.json()) as EsploraAddress;
     const confirmed = BigInt(
       json.chain_stats.funded_txo_sum - json.chain_stats.spent_txo_sum,
     );
@@ -161,8 +169,37 @@ export async function getAddressBalanceAction(
       confirmedSats: confirmed.toString(),
       unconfirmedSats: unconfirmed.toString(),
       totalSats: (confirmed + unconfirmed).toString(),
+      tipTimestamp: tipTs,
     };
   } catch {
     return ZERO_BALANCE;
+  }
+}
+
+/**
+ * Best-effort fetch of the latest signet block's UNIX timestamp via two
+ * sequential esplora calls (`/blocks/tip/hash` → `/block/<hash>`). Cached
+ * via Next's revalidate so concurrent balance polls share one upstream
+ * roundtrip. Returns undefined on any failure — caller renders without
+ * the ETA chip rather than crashing.
+ */
+async function fetchSignetTipTimestamp(): Promise<number | undefined> {
+  try {
+    const hashRes = await fetch(`${ESPLORA_URL}/blocks/tip/hash`, {
+      next: { revalidate: 30, tags: ['esplora:tip'] },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!hashRes.ok) return undefined;
+    const hash = (await hashRes.text()).trim();
+    if (!/^[0-9a-f]{64}$/.test(hash)) return undefined;
+    const blockRes = await fetch(`${ESPLORA_URL}/block/${hash}`, {
+      next: { revalidate: 30, tags: [`esplora:block:${hash}`] },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!blockRes.ok) return undefined;
+    const block = (await blockRes.json()) as { timestamp?: number };
+    return typeof block.timestamp === 'number' ? block.timestamp : undefined;
+  } catch {
+    return undefined;
   }
 }

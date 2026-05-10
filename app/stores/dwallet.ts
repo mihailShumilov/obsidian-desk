@@ -33,6 +33,11 @@ interface DwalletState {
   balanceSats: string;
   /** Sum of confirmed + unconfirmed (mempool), in sats string. */
   totalSats: string;
+  /** UNIX seconds of the latest signet block. Drives the "next block ~Xm"
+   *  ETA next to pending balances. Null when the upstream lookup hasn't
+   *  completed yet or returned an error. Not persisted — re-derived on
+   *  each balance poll. */
+  tipTimestamp: number | null;
   policyLocked: boolean;
   policyAccount: string | null;
   /** Per-step mode markers — populated by the actions, rendered as badges
@@ -42,7 +47,7 @@ interface DwalletState {
   /** Wizard cursor — preserved across refreshes. */
   step: 'create' | 'fund' | 'lock' | 'done';
   setDwallet(dw: DwalletInfo, mode?: WizardMode): void;
-  setBalance(confirmed: bigint, total: bigint): void;
+  setBalance(confirmed: bigint, total: bigint, tipTimestamp: number | null): void;
   setPolicy(policyAccount: string, mode?: WizardMode): void;
   setStep(s: DwalletState['step']): void;
   reset(): void;
@@ -54,6 +59,7 @@ export const useDwalletStore = create<DwalletState>()(
       dwallet: null,
       balanceSats: '0',
       totalSats: '0',
+      tipTimestamp: null,
       policyLocked: false,
       policyAccount: null,
       createMode: null,
@@ -61,8 +67,12 @@ export const useDwalletStore = create<DwalletState>()(
       step: 'create',
       setDwallet: (dwallet, mode) =>
         set({ dwallet, step: 'fund', policyLocked: false, createMode: mode ?? null }),
-      setBalance: (confirmed, total) =>
-        set({ balanceSats: confirmed.toString(), totalSats: total.toString() }),
+      setBalance: (confirmed, total, tipTimestamp) =>
+        set({
+          balanceSats: confirmed.toString(),
+          totalSats: total.toString(),
+          tipTimestamp,
+        }),
       setPolicy: (policyAccount, mode) =>
         set({ policyLocked: true, policyAccount, step: 'done', lockMode: mode ?? null }),
       setStep: (step) => set({ step }),
@@ -71,6 +81,7 @@ export const useDwalletStore = create<DwalletState>()(
           dwallet: null,
           balanceSats: '0',
           totalSats: '0',
+          tipTimestamp: null,
           policyLocked: false,
           policyAccount: null,
           createMode: null,
@@ -120,7 +131,11 @@ export function useDwalletPoller(): void {
       try {
         const bal = await getAddressBalanceAction(dwallet.address);
         if (cancelled || lastFetchedFor.current !== dwallet.address) return;
-        setBalance(BigInt(bal.confirmedSats), BigInt(bal.totalSats));
+        setBalance(
+          BigInt(bal.confirmedSats),
+          BigInt(bal.totalSats),
+          bal.tipTimestamp ?? null,
+        );
       } catch {
         // Network errors are intentionally swallowed — the action itself
         // already returns 0 on failure; we only land here on a true
