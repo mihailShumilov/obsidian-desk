@@ -24,6 +24,20 @@
 name: obsidian-desk
 
 services:
+  # One-shot init: chown the shared dWallet-keys volume to uid:gid 1001
+  # before the long-running services start. Docker creates named-volume
+  # mountpoints owned by root, but `app` and `keeper` both run as 1001
+  # (`nextjs` / `keeper` user). Without this step, the first deploy on a
+  # fresh host hits EACCES the moment either container tries to write
+  # `/var/obsidian/keys/mock-keys.json.tmp.*`.
+  keys-init:
+    image: busybox:1.37
+    container_name: obsidian-keys-init
+    command: ['sh', '-c', 'chown -R 1001:1001 /var/obsidian/keys && chmod 700 /var/obsidian/keys']
+    volumes:
+      - obsidian-keys:/var/obsidian/keys
+    restart: 'no'
+
   solana-validator:
     # Opt-in via `docker compose --profile local-rpc up`. Reasoning:
     # Anza ships only linux/amd64 images, and current Agave 3.x panics
@@ -89,6 +103,9 @@ services:
       OBSIDIAN_MOCK_STORE_PATH: /var/obsidian/keys/mock-keys.json
     ports:
       - '13000:3000'
+    depends_on:
+      keys-init:
+        condition: service_completed_successfully
     volumes:
       - obsidian-keys:/var/obsidian/keys
       # /positions reads MatchRecord PDAs via the IDL — same bind-mount as
@@ -134,6 +151,9 @@ services:
       KEEPER_FEERATE: '4'
     ports:
       - '13001:3001'
+    depends_on:
+      keys-init:
+        condition: service_completed_successfully
     # See app: validator dependency is opt-in via the `local-rpc` profile.
     extra_hosts:
       - 'host.docker.internal:host-gateway'

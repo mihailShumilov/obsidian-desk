@@ -56,7 +56,9 @@ services:
       OBSIDIAN_BTC_MODE: ${OBSIDIAN_BTC_MODE:-auto}
       # Shared file-backed dWallet store across app + keeper.
       OBSIDIAN_MOCK_STORE_PATH: /var/obsidian/keys/mock-keys.json
-    depends_on: !reset []
+    depends_on:
+      keys-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
@@ -82,7 +84,9 @@ services:
       KEEPER_POLL_MS: ${KEEPER_POLL_MS:-3000}
       KEEPER_PORT: '3001'
       KEEPER_FEERATE: ${KEEPER_FEERATE:-4}
-    depends_on: !reset []
+    depends_on:
+      keys-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
