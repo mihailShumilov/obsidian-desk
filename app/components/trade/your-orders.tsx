@@ -11,6 +11,7 @@
  * P9 wires it to the on-chain `cancel_order` instruction.
  */
 
+import { useWallet } from '@solana/wallet-adapter-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -51,6 +52,23 @@ const STATUS_STYLE: Record<Status, { label: string; cls: string; tip: string }> 
 export function YourOrders(): JSX.Element {
   const orders = useOrderStore((s) => s.yourOrders);
   const cancel = useOrderStore((s) => s.cancelOrder);
+  const { connected } = useWallet();
+
+  // Orders are persisted to localStorage without a per-wallet binding, so
+  // we can't tell whose they are once the connected wallet is gone.
+  // Showing them under a disconnected state implies they belong to whoever
+  // is about to connect, which is misleading. Hide entirely; the local
+  // tape rehydrates as soon as the original wallet reconnects (and the
+  // 20s on-chain poll re-validates from EncryptedOrder PDAs).
+  if (!connected) {
+    return (
+      <Card className="mt-8 p-10 text-center">
+        <p className="text-sm text-muted">
+          Connect a wallet to see your orders.
+        </p>
+      </Card>
+    );
+  }
 
   if (orders.length === 0) {
     return (

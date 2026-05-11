@@ -185,11 +185,17 @@ export function TradeTerminal(): JSX.Element {
   const [fastSettle, setFastSettle] = useState(false);
   const matchQueueRef = useRef<string[]>([]);
 
+  // When the wallet is disconnected we have no way to verify these local
+  // orders belong to the would-be-connected wallet. Treat the tape as
+  // empty in that case — the orderbook stops highlighting "YOURS" rows
+  // and the Your Orders table renders its connect-wallet prompt instead
+  // of leaking the previous session's tape.
+  const visibleOrders = wallet.connected ? yourOrders : [];
   const yourIds = useMemo(
-    () => new Set(yourOrders.map((o) => o.id)),
-    [yourOrders],
+    () => new Set(visibleOrders.map((o) => o.id)),
+    [visibleOrders],
   );
-  const book = useMemo(() => bookView(yourOrders), [yourOrders]);
+  const book = useMemo(() => bookView(visibleOrders), [visibleOrders]);
 
   // Net realized USDC notional from settled orders. Asks add (received
   // USDC for BTC sold), bids subtract (spent USDC on BTC bought). The
