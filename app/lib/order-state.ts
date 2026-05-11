@@ -98,17 +98,33 @@ export const useOrderStore = create<OrderState>()(
       hydrateFromChain: (rows) =>
         set((s) => {
           const byNonce = new Map(rows.map((r) => [r.nonceHex.toLowerCase(), r]));
-          const merged = s.yourOrders.map((o) => {
+          // Walk every local order. If the chain query (filtered to the
+          // currently-connected wallet) returns the same nonce, advance
+          // its status. Otherwise we have to decide whether to keep it:
+          //   - txSignature set: this order WAS on-chain. The chain says
+          //     it's not for this wallet, so it belongs to whatever wallet
+          //     was connected when it was submitted. Drop — leaving it
+          //     under a different wallet's session is the "Your Orders
+          //     shows another wallet's orders" leak.
+          //   - encrypted: true: a placeholder from a prior hydration
+          //     cycle (different wallet). Same reasoning — drop.
+          //   - Otherwise: a local-only stub (no on-chain submission).
+          //     Keep it; the demo Try Match modal still operates on these.
+          const merged: YourOrder[] = [];
+          for (const o of s.yourOrders) {
             const chain = byNonce.get(o.id.toLowerCase());
-            if (!chain) return o;
-            byNonce.delete(o.id.toLowerCase());
-            return { ...o, status: mergeStatus(o.status, chain.status) };
-          });
-          // Anything left in byNonce is on-chain but unknown to the local tape.
+            if (chain) {
+              byNonce.delete(o.id.toLowerCase());
+              merged.push({ ...o, status: mergeStatus(o.status, chain.status) });
+              continue;
+            }
+            if (o.txSignature || o.encrypted) continue;
+            merged.push(o);
+          }
+          // Anything left in byNonce is on-chain for the current wallet
+          // but unknown to the local tape (other device, post-clear).
           const placeholders: YourOrder[] = Array.from(byNonce.values()).map((r) => ({
             id: r.nonceHex,
-            // We don't know the side without the plaintext — render as 'ask'
-            // by convention (UI clearly shows "encrypted" instead of values).
             side: 'ask' as Side,
             priceUsdc: 0,
             sizeBtc: 0,

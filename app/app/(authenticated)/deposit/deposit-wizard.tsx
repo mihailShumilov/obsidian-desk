@@ -73,57 +73,62 @@ export function DepositWizard(): JSX.Element {
     return <div className="h-32 animate-pulse rounded-lg border border-obsidian-700 bg-obsidian-900" />;
   }
 
-  // dWallet ↔ Solana wallet binding mismatch banner. We render it above
-  // every branch below so the user can resolve it whether they're mid-wizard
-  // or already in DoneState.
+  // dWallet ↔ Solana wallet binding mismatch banner. When the stored dWallet
+  // was created by a different Solana wallet (or predates wallet-binding),
+  // every action below — Fund's "Continue", Lock's button, the DoneState
+  // address — is misleading or outright broken at the server-action layer.
+  // Short-circuit to the banner so the user resolves the binding first.
   const ownership = dwalletOwnership(
     dwallet,
     publicKey ? publicKey.toBase58() : null,
   );
-  const mismatchBanner = (ownership === 'foreign' || ownership === 'orphan') ? (
-    <div className="mb-6 flex items-start gap-3 rounded-lg border border-bitcoin-ember/40 bg-bitcoin-ember/10 p-4 text-sm">
-      <span aria-hidden="true" className="text-base text-bitcoin-ember">⚠</span>
-      <div className="flex-1">
-        <p className="font-medium text-foreground">
-          {ownership === 'foreign'
-            ? 'This dWallet belongs to a different Solana wallet.'
-            : 'Your stored dWallet predates wallet-binding.'}
-        </p>
-        <p className="mt-1 text-xs text-muted">
-          A dWallet is bound to the Solana wallet that created it — only that
-          wallet can sign settlements. Reconnect the original wallet, or click{' '}
-          <button
-            type="button"
-            onClick={reset}
-            className="text-cipher-cyan-dim underline hover:text-cipher-cyan"
-          >
-            Reset dWallet (start over)
-          </button>{' '}
-          to create one for the connected wallet.
-        </p>
+  if (ownership === 'foreign' || ownership === 'orphan') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start gap-3 rounded-lg border border-bitcoin-ember/40 bg-bitcoin-ember/10 p-5 text-sm">
+          <span aria-hidden="true" className="text-base text-bitcoin-ember">⚠</span>
+          <div className="flex-1">
+            <p className="font-medium text-foreground">
+              {ownership === 'foreign'
+                ? 'This dWallet belongs to a different Solana wallet.'
+                : 'Your stored dWallet predates wallet-binding.'}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              A dWallet is bound to the Solana wallet that created it — only
+              that wallet can sign settlements. Reconnect the original wallet
+              (the one whose pubkey matches the dWallet&apos;s creator), or
+              reset to create a fresh dWallet for the currently-connected wallet.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button variant="primary" onClick={reset}>
+                Reset dWallet (start over)
+              </Button>
+              <p className="text-[11px] text-muted">
+                Clears local dWallet state. The on-chain dWallet stays put —
+                only the original wallet can ever use it.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-  ) : null;
+    );
+  }
 
   if (policyLocked && dwallet) {
     return (
-      <>
-        {mismatchBanner}
-        <DoneState
-          dwallet={dwallet}
-          policyAccount={policyAccount}
-          balanceSats={BigInt(balanceSats)}
-          totalSats={BigInt(totalSats)}
-          tipTimestamp={tipTimestamp}
-          onReset={reset}
-        />
-      </>
+      <DoneState
+        dwallet={dwallet}
+        policyAccount={policyAccount}
+        balanceSats={BigInt(balanceSats)}
+        totalSats={BigInt(totalSats)}
+        tipTimestamp={tipTimestamp}
+        onReset={reset}
+      />
     );
   }
 
   return (
     <div>
-      {mismatchBanner}
       <div className="grid gap-8 lg:grid-cols-[160px_1fr]">
       <ProgressRail current={step === 'done' ? 'done' : step} />
       <div className="space-y-6">
