@@ -44,6 +44,11 @@ export interface CreateDWalletResult {
   id: string;
   chain: string;
   address: string;
+  /** Solana pubkey of the wallet that created this dWallet — bound at
+   *  creation time so the UI can refuse to surface it under a different
+   *  connected wallet. Same value the client passed in; round-tripped so
+   *  the client doesn't need to remember it separately. */
+  creator: string;
   /** 'real-ok' if the dWallet was created via Ika MPC DKG, 'real-failed-fallback'
    *  if Ika was unreachable and we synthesised a local key, 'mock' if explicit
    *  mock mode. UI badges show this so users know whether their dWallet is
@@ -68,7 +73,13 @@ export async function createDWalletAction(
     throw new Error('createDWalletAction: walletPubkey is required');
   }
   const dw = await ika.createDWallet('bitcoin-signet', { creator: walletPubkey });
-  return { id: dw.id, chain: dw.chain, address: dw.address, mode: dw.mode };
+  return {
+    id: dw.id,
+    chain: dw.chain,
+    address: dw.address,
+    creator: walletPubkey,
+    mode: dw.mode,
+  };
 }
 
 export interface LockPolicyResult {

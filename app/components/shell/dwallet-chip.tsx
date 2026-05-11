@@ -7,19 +7,30 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useDwalletStore } from '@/stores/dwallet';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { dwalletOwnership, useDwalletStore } from '@/stores/dwallet';
 import { formatBtc, truncateAddress } from '@/lib/format';
 
 export function DWalletChip(): JSX.Element | null {
   const dwallet = useDwalletStore((s) => s.dwallet);
   const balanceSats = useDwalletStore((s) => s.balanceSats);
   const policyLocked = useDwalletStore((s) => s.policyLocked);
+  const { publicKey } = useWallet();
 
   const [hydrated, setHydrated] = useState(false);
   const [copied, setCopied] = useState(false);
   useEffect(() => setHydrated(true), []);
 
-  if (!hydrated || !dwallet) return null;
+  // Only surface the dWallet in the header when the connected wallet is
+  // the one that created it. Disconnected / different-wallet / legacy
+  // orphan all hide the chip — the deposit and trade pages render the
+  // appropriate reset / reconnect prompts.
+  const ownership = dwalletOwnership(
+    dwallet,
+    publicKey ? publicKey.toBase58() : null,
+  );
+  if (!hydrated || ownership !== 'mine') return null;
+  if (!dwallet) return null;
 
   async function copy(): Promise<void> {
     if (!dwallet) return;

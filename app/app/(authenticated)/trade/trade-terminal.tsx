@@ -32,7 +32,7 @@ import { Card } from '@/components/ui/card';
 import { ChainBadge } from '@/components/obsidian/chain-badge';
 import { OrderbookVoid } from '@/components/obsidian/orderbook-void';
 import { OrderForm, type OrderFormSubmit } from '@/components/trade/order-form';
-import { useDwalletStore } from '@/stores/dwallet';
+import { dwalletOwnership, useDwalletStore } from '@/stores/dwallet';
 import { formatBtc } from '@/lib/format';
 import {
   prepareEncryptedOrderAction,
@@ -220,9 +220,14 @@ export function TradeTerminal(): JSX.Element {
     !!dwallet &&
     (dwallet.id.length === 64 || dwallet.id.length === 66) &&
     /^[0-9a-fA-F]+$/.test(dwallet.id);
+  const ownership = dwalletOwnership(
+    dwallet,
+    wallet.publicKey ? wallet.publicKey.toBase58() : null,
+  );
   const onChainReady =
     !!anchorWallet &&
     dwalletIdValid &&
+    ownership === 'mine' &&
     !!programSetup &&
     !!programSetup.idl &&
     !!programSetup.marketPubkey;
@@ -410,6 +415,40 @@ export function TradeTerminal(): JSX.Element {
         </div>
       )}
 
+      {ownership === 'foreign' && (
+        <div className="mb-5 flex items-start gap-3 rounded-lg border border-bitcoin-ember/40 bg-bitcoin-ember/10 p-4 text-sm">
+          <span aria-hidden="true" className="text-base text-bitcoin-ember">⚠</span>
+          <div className="flex-1">
+            <p className="font-medium text-foreground">
+              This dWallet was created by a different Solana wallet.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              The connected wallet didn&apos;t create the locally-stored dWallet,
+              so it can&apos;t sign settlements for it. Reconnect the original
+              wallet, or open <Link href="/deposit" className="text-cipher-cyan-dim underline hover:text-cipher-cyan">/deposit</Link>
+              and click <em className="not-italic">Reset dWallet (start over)</em> to
+              create one for the current wallet.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {ownership === 'orphan' && (
+        <div className="mb-5 flex items-start gap-3 rounded-lg border border-bitcoin-ember/40 bg-bitcoin-ember/10 p-4 text-sm">
+          <span aria-hidden="true" className="text-base text-bitcoin-ember">⚠</span>
+          <div className="flex-1">
+            <p className="font-medium text-foreground">
+              Your stored dWallet predates wallet-binding — please re-create it.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Open <Link href="/deposit" className="text-cipher-cyan-dim underline hover:text-cipher-cyan">/deposit</Link>
+              and click <em className="not-italic">Reset dWallet (start over)</em>
+              so the dWallet records which Solana wallet owns it.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-[minmax(260px,0.9fr)_minmax(480px,1.5fr)_minmax(300px,1fr)]">
         {/* Left — encrypted book */}
         <Card className="p-4">
@@ -453,7 +492,7 @@ export function TradeTerminal(): JSX.Element {
 
           <BalancesPanel
             connected={canSubmit}
-            dwalletExists={!!dwallet}
+            ownsDwallet={ownership === 'mine'}
             policyLocked={policyLocked}
             balanceSats={BigInt(balanceSats)}
             totalSats={BigInt(totalSats)}
@@ -500,14 +539,18 @@ export function TradeTerminal(): JSX.Element {
  */
 function BalancesPanel({
   connected,
-  dwalletExists,
+  ownsDwallet,
   policyLocked,
   balanceSats,
   totalSats,
   realizedUsdc,
 }: {
   connected: boolean;
-  dwalletExists: boolean;
+  /** True only when the connected Solana wallet matches the locally-stored
+   *  dWallet's creator. Disconnected, foreign, or orphan dWallets render
+   *  the "lock one in /deposit" prompt instead of leaking another wallet's
+   *  balance under the current connection. */
+  ownsDwallet: boolean;
   policyLocked: boolean;
   balanceSats: bigint;
   totalSats: bigint;
@@ -521,8 +564,8 @@ function BalancesPanel({
         Balances
       </p>
       {!connected ? (
-        <p className="text-xs text-muted">Create your dWallet to trade.</p>
-      ) : !dwalletExists ? (
+        <p className="text-xs text-muted">Connect a wallet to see your dWallet.</p>
+      ) : !ownsDwallet ? (
         <div className="flex items-center justify-between text-sm">
           <ChainBadge chain="bitcoin" />
           <Link

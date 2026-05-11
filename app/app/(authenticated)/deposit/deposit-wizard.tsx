@@ -22,7 +22,7 @@ import { ProgressRail } from '@/components/deposit/progress-rail';
 import { StepShell } from '@/components/deposit/step-shell';
 import { KeyShards } from '@/components/deposit/key-shards';
 import { CopyButton } from '@/components/deposit/copy-button';
-import { useDwalletStore, type WizardMode } from '@/stores/dwallet';
+import { dwalletOwnership, useDwalletStore, type WizardMode } from '@/stores/dwallet';
 import { useOrderStore } from '@/lib/order-state';
 import { formatBtc, formatNextBlockEta, truncateAddress } from '@/lib/format';
 import { DEFAULT_ORDER_EXPIRY_SLOTS } from '@obsidian-desk/sdk';
@@ -40,6 +40,7 @@ const MODE_LABEL: Record<WizardMode, string> = {
 };
 
 export function DepositWizard(): JSX.Element {
+  const { publicKey } = useWallet();
   const dwallet = useDwalletStore((s) => s.dwallet);
   const balanceSats = useDwalletStore((s) => s.balanceSats);
   const totalSats = useDwalletStore((s) => s.totalSats);
@@ -72,19 +73,58 @@ export function DepositWizard(): JSX.Element {
     return <div className="h-32 animate-pulse rounded-lg border border-obsidian-700 bg-obsidian-900" />;
   }
 
+  // dWallet ↔ Solana wallet binding mismatch banner. We render it above
+  // every branch below so the user can resolve it whether they're mid-wizard
+  // or already in DoneState.
+  const ownership = dwalletOwnership(
+    dwallet,
+    publicKey ? publicKey.toBase58() : null,
+  );
+  const mismatchBanner = (ownership === 'foreign' || ownership === 'orphan') ? (
+    <div className="mb-6 flex items-start gap-3 rounded-lg border border-bitcoin-ember/40 bg-bitcoin-ember/10 p-4 text-sm">
+      <span aria-hidden="true" className="text-base text-bitcoin-ember">⚠</span>
+      <div className="flex-1">
+        <p className="font-medium text-foreground">
+          {ownership === 'foreign'
+            ? 'This dWallet belongs to a different Solana wallet.'
+            : 'Your stored dWallet predates wallet-binding.'}
+        </p>
+        <p className="mt-1 text-xs text-muted">
+          A dWallet is bound to the Solana wallet that created it — only that
+          wallet can sign settlements. Reconnect the original wallet, or click{' '}
+          <button
+            type="button"
+            onClick={reset}
+            className="text-cipher-cyan-dim underline hover:text-cipher-cyan"
+          >
+            Reset dWallet (start over)
+          </button>{' '}
+          to create one for the connected wallet.
+        </p>
+      </div>
+    </div>
+  ) : null;
+
   if (policyLocked && dwallet) {
-    return <DoneState
-      dwallet={dwallet}
-      policyAccount={policyAccount}
-      balanceSats={BigInt(balanceSats)}
-      totalSats={BigInt(totalSats)}
-      tipTimestamp={tipTimestamp}
-      onReset={reset}
-    />;
+    return (
+      <>
+        {mismatchBanner}
+        <DoneState
+          dwallet={dwallet}
+          policyAccount={policyAccount}
+          balanceSats={BigInt(balanceSats)}
+          totalSats={BigInt(totalSats)}
+          tipTimestamp={tipTimestamp}
+          onReset={reset}
+        />
+      </>
+    );
   }
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[160px_1fr]">
+    <div>
+      {mismatchBanner}
+      <div className="grid gap-8 lg:grid-cols-[160px_1fr]">
       <ProgressRail current={step === 'done' ? 'done' : step} />
       <div className="space-y-6">
         <CreateStep
@@ -121,6 +161,7 @@ export function DepositWizard(): JSX.Element {
           onBack={() => setStep('fund')}
         />
       </div>
+      </div>
     </div>
   );
 }
@@ -149,7 +190,7 @@ function CreateStep({
   dwalletAddress: string | null;
   mode: WizardMode | null;
   onCreated: (
-    dw: { id: string; address: string; chain: 'bitcoin-signet' },
+    dw: { id: string; address: string; chain: 'bitcoin-signet'; creator: string },
     mode: WizardMode,
   ) => void;
 }): JSX.Element {
@@ -167,7 +208,12 @@ function CreateStep({
     try {
       const result = await createDWalletAction(publicKey.toBase58());
       onCreated(
-        { id: result.id, address: result.address, chain: 'bitcoin-signet' },
+        {
+          id: result.id,
+          address: result.address,
+          chain: 'bitcoin-signet',
+          creator: result.creator,
+        },
         result.mode,
       );
     } catch (err) {

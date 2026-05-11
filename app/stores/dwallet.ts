@@ -25,6 +25,10 @@ export interface DwalletInfo {
   /** Bech32 P2WPKH address. */
   address: string;
   chain: 'bitcoin-signet';
+  /** Solana pubkey of the wallet that created this dWallet. Optional only
+   *  to keep older persisted entries deserialisable; new creates always
+   *  set it, and the UI treats missing creator as "orphan — needs reset". */
+  creator?: string;
 }
 
 interface DwalletState {
@@ -110,6 +114,31 @@ export const useDwalletStore = create<DwalletState>()(
     },
   ),
 );
+
+/**
+ * Returns one of:
+ *   - 'none'      — no dWallet in the local store
+ *   - 'orphan'    — dWallet exists but has no creator binding (legacy persisted
+ *                   entry from before the field was added). Treat as suspect:
+ *                   ask the user to reset.
+ *   - 'disconnected' — no Solana wallet connected. The dWallet may belong to
+ *                      this user; we just can't verify without the pubkey.
+ *   - 'mine'      — connected wallet matches the dWallet's recorded creator.
+ *   - 'foreign'   — connected wallet is different from the creator. Showing
+ *                   the dWallet's address/balance under this connection would
+ *                   be misleading; surface a reset prompt instead.
+ */
+export type DwalletOwnership = 'none' | 'orphan' | 'disconnected' | 'mine' | 'foreign';
+
+export function dwalletOwnership(
+  dwallet: DwalletInfo | null,
+  connectedPubkey: string | null,
+): DwalletOwnership {
+  if (!dwallet) return 'none';
+  if (!dwallet.creator) return 'orphan';
+  if (!connectedPubkey) return 'disconnected';
+  return dwallet.creator === connectedPubkey ? 'mine' : 'foreign';
+}
 
 /**
  * Hook: every 15s, refresh the on-chain balance for the current dWallet.
