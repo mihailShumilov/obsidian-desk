@@ -130,10 +130,21 @@ export const useOrderStore = create<OrderState>()(
   ),
 );
 
-/** Compose the 14-row encrypted book from your-active-orders + filler. */
+/** Compose the 14-row encrypted book from your-active-orders + filler.
+ *
+ * Excludes orders without local plaintext (`encrypted: true` placeholders
+ * from on-chain hydration) — rendering them as `0.00 × 0.000 YOURS` rows
+ * inside the orderbook was a leak of the placeholder shape into a surface
+ * that only makes sense with real price/size. They still show in the
+ * Your Orders table below, where the "encrypted" label is the truthful
+ * representation. */
 export function bookView(yourOrders: YourOrder[]): BookRow[] {
   const active = yourOrders.filter(
-    (o) => o.status === 'sealed' || o.status === 'matched',
+    (o) =>
+      (o.status === 'sealed' || o.status === 'matched') &&
+      !o.encrypted &&
+      o.priceUsdc > 0 &&
+      o.sizeBtc > 0,
   );
   const yours: BookRow[] = active.slice(0, 3).map((o) => ({
     id: o.id,
