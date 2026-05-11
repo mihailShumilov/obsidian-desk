@@ -347,19 +347,28 @@ export function TradeTerminal(): JSX.Element {
     setTimeout(() => setStatus(target.id, 'settled'), settledAt);
   }
 
+  /** Try Match is a local-only demo: it advances the UI state machine for
+   *  an order that lives entirely in the local tape. Real on-chain orders
+   *  (with txSignature) only progress via keeper-driven matching against
+   *  a counterparty PDA — clicking Try Match on those would print a lie
+   *  ("Settled" while /positions still shows Open). Filter them out. */
+  function localSealedOnly(): YourOrder[] {
+    return yourOrders.filter(
+      (o) => o.status === 'sealed' && !o.txSignature && !o.encrypted,
+    );
+  }
+
   function handleTryMatch(): void {
-    const sealed = yourOrders.filter((o) => o.status === 'sealed');
-    if (sealed.length === 0) return;
-    startMatch(sealed[0]!.id);
+    const candidates = localSealedOnly();
+    if (candidates.length === 0) return;
+    startMatch(candidates[0]!.id);
   }
 
   function handleMatchAll(): void {
-    const sealed = yourOrders.filter((o) => o.status === 'sealed');
-    if (sealed.length === 0) return;
-    // Drain via the queue: kick off the first now, the rest after each
-    // modal closes via onComplete below.
-    matchQueueRef.current = sealed.slice(1).map((o) => o.id);
-    startMatch(sealed[0]!.id);
+    const candidates = localSealedOnly();
+    if (candidates.length === 0) return;
+    matchQueueRef.current = candidates.slice(1).map((o) => o.id);
+    startMatch(candidates[0]!.id);
   }
 
   function handleMatchComplete(): void {
@@ -377,7 +386,7 @@ export function TradeTerminal(): JSX.Element {
     <main className="mx-auto max-w-7xl px-6 py-8">
       <Header
         onTryMatch={handleTryMatch}
-        canTry={yourOrders.some((o) => o.status === 'sealed')}
+        canTry={localSealedOnly().length > 0}
         adminMode={adminMode}
         onMatchAll={handleMatchAll}
         fastSettle={fastSettle}
@@ -653,9 +662,13 @@ function Header({
           variant={canTry ? 'primary' : 'secondary'}
           onClick={onTryMatch}
           disabled={!canTry}
-          title={canTry ? 'Force-match your oldest sealed order' : 'Seal an order first'}
+          title={
+            canTry
+              ? 'Demo trigger — animates the local match modal for an order that never reached the chain. Real on-chain orders match only against a counterparty PDA.'
+              : 'No local-only sealed orders to demo. On-chain orders match via keeper.'
+          }
         >
-          Try Match
+          Try Match (demo)
         </Button>
       </div>
     </div>

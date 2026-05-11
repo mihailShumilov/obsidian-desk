@@ -65,11 +65,14 @@ interface OrderState {
 }
 
 function mergeStatus(local: Status, chain: OnChainOrderHydration['status']): Status {
-  // Local 'settling'/'settled' carries finer-grained UI state (the demo
-  // modal animation) that the chain enum doesn't model — preserve it.
-  if (local === 'settled' || local === 'settling') return local;
-  if (chain === 'active') return local === 'matched' ? 'matched' : 'sealed';
-  if (chain === 'matched') return 'matched';
+  // Trust the chain. Local 'settling'/'settled' from the Try Match demo
+  // animation is a UI artifact, not real settlement — letting it persist
+  // makes /trade show "Settled" while /positions correctly shows "Open".
+  // The next 20s poll cycle re-reverts the badge to chain truth.
+  if (chain === 'active') return 'sealed';
+  if (chain === 'matched') return local === 'settling' || local === 'settled'
+    ? local // a real settle path would have updated local; keep finer state
+    : 'matched';
   return 'cancelled';
 }
 
