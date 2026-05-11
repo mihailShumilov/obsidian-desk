@@ -352,25 +352,25 @@ export function TradeTerminal(): JSX.Element {
     setTimeout(() => setStatus(target.id, 'settled'), settledAt);
   }
 
-  /** Try Match is a local-only demo: it advances the UI state machine for
-   *  an order that lives entirely in the local tape. Real on-chain orders
-   *  (with txSignature) only progress via keeper-driven matching against
-   *  a counterparty PDA — clicking Try Match on those would print a lie
-   *  ("Settled" while /positions still shows Open). Filter them out. */
-  function localSealedOnly(): YourOrder[] {
-    return yourOrders.filter(
-      (o) => o.status === 'sealed' && !o.txSignature && !o.encrypted,
-    );
+  /** Try Match drives the UI choreography modal for the demo video. It
+   *  works on any sealed order, including on-chain ones — the animation
+   *  is a presentation of the protocol, not real settlement. For on-chain
+   *  orders the next 20s hydration poll will revert the badge to chain
+   *  truth (Active → Sealed), so the local advance is short-lived; that's
+   *  intentional, the modal is the demo, not the badge. Encrypted
+   *  placeholders are still skipped — we have no plaintext to render. */
+  function demoCandidates(): YourOrder[] {
+    return yourOrders.filter((o) => o.status === 'sealed' && !o.encrypted);
   }
 
   function handleTryMatch(): void {
-    const candidates = localSealedOnly();
+    const candidates = demoCandidates();
     if (candidates.length === 0) return;
     startMatch(candidates[0]!.id);
   }
 
   function handleMatchAll(): void {
-    const candidates = localSealedOnly();
+    const candidates = demoCandidates();
     if (candidates.length === 0) return;
     matchQueueRef.current = candidates.slice(1).map((o) => o.id);
     startMatch(candidates[0]!.id);
@@ -391,7 +391,7 @@ export function TradeTerminal(): JSX.Element {
     <main className="mx-auto max-w-7xl px-6 py-8">
       <Header
         onTryMatch={handleTryMatch}
-        canTry={localSealedOnly().length > 0}
+        canTry={demoCandidates().length > 0}
         adminMode={adminMode}
         onMatchAll={handleMatchAll}
         fastSettle={fastSettle}
@@ -707,8 +707,8 @@ function Header({
           disabled={!canTry}
           title={
             canTry
-              ? 'Demo trigger — animates the local match modal for an order that never reached the chain. Real on-chain orders match only against a counterparty PDA.'
-              : 'No local-only sealed orders to demo. On-chain orders match via keeper.'
+              ? 'Demo trigger — plays the match + settle modal for one of your sealed orders. For on-chain orders the badge reverts to chain truth on the next 20s hydration poll; the modal animation is the demo, not the badge.'
+              : 'No sealed orders to demo. Submit one with Encrypt & Seal first.'
           }
         >
           Try Match (demo)
